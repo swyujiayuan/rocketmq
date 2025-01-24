@@ -87,9 +87,20 @@ public class GetMessageResult {
         return messageBufferList;
     }
 
+    /**
+     * 添加消息buffer到GetMessageResult中。
+     *
+     * 注意这里仅仅是添加字节buffer序列，并且直接返回给Consumer，
+     * 没有反序列化为Message对象，Consumer收到消息之后，会按照CommitLog消息序列化格式自行反序列化为Message对象。
+     *
+     * @param mapedBuffer
+     */
     public void addMessage(final SelectMappedBufferResult mapedBuffer) {
+        //mapedBuffer加入到集合中
         this.messageMapedList.add(mapedBuffer);
+        //byteBuffer加入到集合中
         this.messageBufferList.add(mapedBuffer.getByteBuffer());
+        //已拉取的消息总大小加上当前消息的大小
         this.bufferTotalSize += mapedBuffer.getSize();
         this.msgCount4Commercial += (int) Math.ceil(
             mapedBuffer.getSize() / BrokerStatsManager.SIZE_PER_COUNT);

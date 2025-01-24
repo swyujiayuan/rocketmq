@@ -36,22 +36,40 @@ public class TransactionalMessageCheckService extends ServiceThread {
         return TransactionalMessageCheckService.class.getSimpleName();
     }
 
+    /**
+     * 这个线程任务内部是一个循环，首先获取事务回查时间间隔，默认60s，可通过broker.conf配置transactionCheckInterval属性更改，即每隔60s进行一次失误回查。
+     *
+     * 首先需要获取broker端的事务超时时间，默认6s，即超过6s还没有被commit或者rollback的事物消息将会进行回查
+     * 可通过broker.conf配置transactionTimeOut属性更改，还要获取事务回查最大次数，默认15，
+     * 超过次数则丢弃消息，可通过broker.conf配置transactionCheckMax属性更改。
+     * 然后调用TransactionalMessageService#check方法进行事物检查和回查。
+     *
+     */
     @Override
     public void run() {
         log.info("Start transaction check service thread!");
+        //获取事务回查时间间隔，默认60s，可通过broker.conf配置transactionCheckInterval属性更改
         long checkInterval = brokerController.getBrokerConfig().getTransactionCheckInterval();
+        //循环回查
         while (!this.isStopped()) {
+            //最多等待60s执行一次回查
             this.waitForRunning(checkInterval);
         }
         log.info("End transaction check service thread!");
     }
 
+    /**
+     * 被唤醒或者等待时间到了之后，执行事务回查
+     */
     @Override
     protected void onWaitEnd() {
+        //事务超时时间，默认6s，即超过6s还没有被commit或者rollback的事物消息将会进行回查，可通过broker.conf配置transactionTimeOut属性更改
         long timeout = brokerController.getBrokerConfig().getTransactionTimeOut();
+        //事务回查最大次数，默认15，超过次数则丢弃消息，可通过broker.conf配置transactionCheckMax属性更改
         int checkMax = brokerController.getBrokerConfig().getTransactionCheckMax();
         long begin = System.currentTimeMillis();
         log.info("Begin to check prepare message, begin time:{}", begin);
+        //执行事务回查
         this.brokerController.getTransactionalMessageService().check(timeout, checkMax, this.brokerController.getTransactionalMessageCheckListener());
         log.info("End to check prepare message, consumed time:{}", System.currentTimeMillis() - begin);
     }

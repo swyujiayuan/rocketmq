@@ -56,8 +56,15 @@ public class PullMessageService extends ServiceThread {
         }
     }
 
+    /**
+     * PullMessageService的方法
+     * 下一次消息拉取
+     *
+     * @param pullRequest 拉取请求
+     */
     public void executePullRequestImmediately(final PullRequest pullRequest) {
         try {
+            //存入pullRequestQueue集合，等待下次拉取
             this.pullRequestQueue.put(pullRequest);
         } catch (InterruptedException e) {
             log.error("executePullRequestImmediately pullRequestQueue.put", e);
@@ -77,22 +84,39 @@ public class PullMessageService extends ServiceThread {
     }
 
     private void pullMessage(final PullRequest pullRequest) {
+        //从consumerTable中获取pullRequest中保存的消费者组的消费者实例
         final MQConsumerInner consumer = this.mQClientFactory.selectConsumer(pullRequest.getConsumerGroup());
         if (consumer != null) {
+            //强制转型
             DefaultMQPushConsumerImpl impl = (DefaultMQPushConsumerImpl) consumer;
+            //拉取消息
             impl.pullMessage(pullRequest);
         } else {
             log.warn("No matched consumer for the PullRequest {}, drop it", pullRequest);
         }
     }
 
+    /**
+     * 该方法在一个循环中，不断地从pullRequestQueue中阻塞式的获取并移除队列的头部数据，
+     * 即拉取消息的请求，然后调用pullMessage方法根据该请求去broker拉取消息。
+     *
+     * 也就是说只要pullRequestQueue队列中有拉取请求，它就会去Broker拉取消息，如果没有就阻塞。
+     *
+     */
     @Override
     public void run() {
         log.info(this.getServiceName() + " service started");
 
+        /*
+         * 运行时逻辑
+         * 如果服务没有停止，则在死循环中执行拉取消息的操作
+         */
         while (!this.isStopped()) {
             try {
+                //阻塞式的获取并移除队列的头部数据，即拉取消息的请求
                 PullRequest pullRequest = this.pullRequestQueue.take();
+                //根据该请求去broker拉取消息
+                // pullMessage方法是拉取消息的入口方法。内部实际调用DefaultMQPushConsumerImpl的pullMessage方法。
                 this.pullMessage(pullRequest);
             } catch (InterruptedException ignored) {
             } catch (Exception e) {

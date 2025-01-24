@@ -198,10 +198,17 @@ public class DefaultMQProducer extends ClientConfig implements MQProducer {
      * @param namespace Namespace for this MQ Producer instance.
      * @param producerGroup Producer group, see the name-sake field.
      * @param rpcHook RPC hook to execute per each remoting command execution.
+     *
+     * DefaultMQProducer的构造器有很多，但最终都是调用下面三个参数的构造函数：
      */
     public DefaultMQProducer(final String namespace, final String producerGroup, RPCHook rpcHook) {
+        //命名空间
         this.namespace = namespace;
+        //生产者组
         this.producerGroup = producerGroup;
+        //根据RPC钩子创建DefaultMQProducerImpl实例，负责发送消息
+        // DefaultMQProducer可以看作是DefaultMQProducerImpl的包装类，开放给开发人员使用，
+        // DefaultMQProducer中的几乎所有的方法内部都是由DefaultMQProducerImpl实现的。这是门面模式设计模式。
         defaultMQProducerImpl = new DefaultMQProducerImpl(this, rpcHook);
     }
 
@@ -274,11 +281,17 @@ public class DefaultMQProducer extends ClientConfig implements MQProducer {
      * to invoke this method before sending or querying messages. </strong> </p>
      *
      * @throws MQClientException if there is any unexpected error.
+     *
+     * 启动生产者实例
+     * 为了准备这个实例，需要执行许多内部初始化过程，因此，必须在发送或查询消息之前调用这个方法。
      */
     @Override
     public void start() throws MQClientException {
+        //根据namespace和producerGroup设置生产者组
         this.setProducerGroup(withNamespace(this.producerGroup));
+        //默认生产者实现启动
         this.defaultMQProducerImpl.start();
+        //消息轨迹跟踪服务，默认null
         if (null != traceDispatcher) {
             try {
                 traceDispatcher.start(this.getNamesrvAddr(), this.getAccessChannel());
@@ -325,11 +338,14 @@ public class DefaultMQProducer extends ClientConfig implements MQProducer {
      * @throws RemotingException if there is any network-tier error.
      * @throws MQBrokerException if there is any error with broker.
      * @throws InterruptedException if the sending thread is interrupted.
+     *
      */
     @Override
     public SendResult send(
         Message msg) throws MQClientException, RemotingException, MQBrokerException, InterruptedException {
+        //根据namespace设置topic
         msg.setTopic(withNamespace(msg.getTopic()));
+        //调用defaultMQProducerImpl#send发送消息
         return this.defaultMQProducerImpl.send(msg);
     }
 
@@ -399,10 +415,14 @@ public class DefaultMQProducer extends ClientConfig implements MQProducer {
      * @throws MQClientException if there is any client error.
      * @throws RemotingException if there is any network-tier error.
      * @throws InterruptedException if the sending thread is interrupted.
+     *
+     * 单向消息使用sendOneway发送。
      */
     @Override
     public void sendOneway(Message msg) throws MQClientException, RemotingException, InterruptedException {
+        //根据namespace设置topic
         msg.setTopic(withNamespace(msg.getTopic()));
+        //调用defaultMQProducerImpl#sendOneway发送消息
         this.defaultMQProducerImpl.sendOneway(msg);
     }
 
@@ -454,11 +474,15 @@ public class DefaultMQProducer extends ClientConfig implements MQProducer {
      * @throws MQClientException if there is any client error.
      * @throws RemotingException if there is any network-tier error.
      * @throws InterruptedException if the sending thread is interrupted.
+     *
+     * 异步消息
      */
     @Override
     public void send(Message msg, MessageQueue mq, SendCallback sendCallback)
         throws MQClientException, RemotingException, InterruptedException {
+        //根据namespace设置topic
         msg.setTopic(withNamespace(msg.getTopic()));
+        //调用defaultMQProducerImpl#send发送消息，带有sendCallback参数
         this.defaultMQProducerImpl.send(msg, queueWithNamespace(mq), sendCallback);
     }
 

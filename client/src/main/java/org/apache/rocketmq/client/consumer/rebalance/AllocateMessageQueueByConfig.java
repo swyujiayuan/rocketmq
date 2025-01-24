@@ -22,6 +22,10 @@ import org.apache.rocketmq.common.message.MessageQueue;
 public class AllocateMessageQueueByConfig extends AbstractAllocateMessageQueueStrategy {
     private List<MessageQueue> messageQueueList;
 
+    /**
+     * 如果要想使用该策略，那么应该调用setMessageQueueList方法传入自定义的需要消费的消息队列集合，而allocate方法将直接返回该集合。
+     *
+     */
     @Override
     public List<MessageQueue> allocate(String consumerGroup, String currentCID, List<MessageQueue> mqAll,
         List<String> cidAll) {
@@ -37,6 +41,9 @@ public class AllocateMessageQueueByConfig extends AbstractAllocateMessageQueueSt
         return messageQueueList;
     }
 
+    /**
+     * 设置自定义的消息队列集合
+     */
     public void setMessageQueueList(List<MessageQueue> messageQueueList) {
         this.messageQueueList = messageQueueList;
     }

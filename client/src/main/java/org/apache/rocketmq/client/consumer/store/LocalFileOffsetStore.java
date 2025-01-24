@@ -59,8 +59,18 @@ public class LocalFileOffsetStore implements OffsetStore {
             "offsets.json";
     }
 
+    /**
+     * 广播消费模式下，从本地文件恢复offset配置。
+     *
+     * LocalFileOffsetStore的load方法，从本地文件恢复offset配置，
+     * 地址为{user.home}/.rocketmq_offsets/{clientId}/{groupName}/offsets.json，配置在文件中以json形式存在。
+     *
+     * @throws MQClientException
+     */
     @Override
     public void load() throws MQClientException {
+        //加载本地offset文件 地址为{user.home}/.rocketmq_offsets/{clientId}/{groupName}/offsets.json
+        //配置在文件中以json形式存在
         OffsetSerializeWrapper offsetSerializeWrapper = this.readLocalOffset();
         if (offsetSerializeWrapper != null && offsetSerializeWrapper.getOffsetTable() != null) {
             offsetTable.putAll(offsetSerializeWrapper.getOffsetTable());
@@ -75,47 +85,84 @@ public class LocalFileOffsetStore implements OffsetStore {
         }
     }
 
+    /**
+     * 更新内存中的offset
+     *
+     * @param mq           消息队列
+     * @param offset       偏移量
+     * @param increaseOnly 是否仅单调增加offset，顺序消费为false，并发消费为true
+     */
     @Override
     public void updateOffset(MessageQueue mq, long offset, boolean increaseOnly) {
         if (mq != null) {
+            //获取已存在的offset
             AtomicLong offsetOld = this.offsetTable.get(mq);
+            //如果没有老的offset，那么将新的offset存进去
             if (null == offsetOld) {
                 offsetOld = this.offsetTable.putIfAbsent(mq, new AtomicLong(offset));
             }
 
+            //如果有老的offset，那么尝试更新offset
             if (null != offsetOld) {
+                //如果仅单调增加offset，顺序消费为false，并发消费为true
                 if (increaseOnly) {
+                    //如果新的offset大于已存在offset，则尝试在循环中CAS的更新为新offset
                     MixAll.compareAndIncreaseOnly(offsetOld, offset);
                 } else {
+                    //直接设置为新offset，可能导致offset变小
                     offsetOld.set(offset);
                 }
             }
         }
     }
 
+
+    /**
+     * LocalFileOffsetStore的方法
+     * <p>
+     * 获取offset
+     *
+     * @param mq   需要获取offset的mq
+     * @param type 读取类型
+     */
     @Override
     public long readOffset(final MessageQueue mq, final ReadOffsetType type) {
         if (mq != null) {
             switch (type) {
+                /*
+                 * 先从本地内存offsetTable读取，读不到再从磁盘中读取
+                 */
                 case MEMORY_FIRST_THEN_STORE:
+                    /*
+                     * 仅从本地内存offsetTable读取
+                     */
                 case READ_FROM_MEMORY: {
                     AtomicLong offset = this.offsetTable.get(mq);
                     if (offset != null) {
+                        //如果本地内存有关于此mq的offset，那么直接返回
                         return offset.get();
                     } else if (ReadOffsetType.READ_FROM_MEMORY == type) {
+                        //如果本地内存没有关于此mq的offset，但那读取类型为READ_FROM_MEMORY，那么直接返回-1
                         return -1;
                     }
                 }
+                /*
+                 * 仅从本地文件中读取
+                 */
                 case READ_FROM_STORE: {
                     OffsetSerializeWrapper offsetSerializeWrapper;
                     try {
+                        //加载本地offset文件 地址为{user.home}/.rocketmq_offsets/{clientId}/{groupName}/offsets.json
+                        //配置在文件中以json形式存在
                         offsetSerializeWrapper = this.readLocalOffset();
                     } catch (MQClientException e) {
                         return -1;
                     }
+                    //获取对应mq的偏移量
                     if (offsetSerializeWrapper != null && offsetSerializeWrapper.getOffsetTable() != null) {
                         AtomicLong offset = offsetSerializeWrapper.getOffsetTable().get(mq);
                         if (offset != null) {
+                            //更新此mq的offset，并且存入本地offsetTable缓存
                             this.updateOffset(mq, offset.get(), false);
                             return offset.get();
                         }

@@ -331,12 +331,20 @@ public class DefaultMQPushConsumer extends ClientConfig implements MQPushConsume
      * @param consumerGroup Consume queue.
      * @param rpcHook RPC hook to execute before each remoting command.
      * @param allocateMessageQueueStrategy Message queue allocating algorithm.
+     *
+     * 创建DefaultMQPushConsumer实例
+     * @param namespace                    namespace地址
+     * @param consumerGroup                消费者组
+     * @param rpcHook                      在每个远程处理命令之前执行的RPC钩子
+     * @param allocateMessageQueueStrategy 消费者之间消息分配的策略算法
+     *
      */
     public DefaultMQPushConsumer(final String namespace, final String consumerGroup, RPCHook rpcHook,
         AllocateMessageQueueStrategy allocateMessageQueueStrategy) {
         this.consumerGroup = consumerGroup;
         this.namespace = namespace;
         this.allocateMessageQueueStrategy = allocateMessageQueueStrategy;
+        //创建DefaultMQPushConsumerImpl实例
         defaultMQPushConsumerImpl = new DefaultMQPushConsumerImpl(this, rpcHook);
     }
 
@@ -665,6 +673,7 @@ public class DefaultMQPushConsumer extends ClientConfig implements MQPushConsume
     public void sendMessageBack(MessageExt msg, int delayLevel)
         throws RemotingException, MQBrokerException, InterruptedException, MQClientException {
         msg.setTopic(withNamespace(msg.getTopic()));
+        //通过DefaultMQPushConsumerImpl#sendMessageBack发送消费失败的消息，指定延迟等级
         this.defaultMQPushConsumerImpl.sendMessageBack(msg, delayLevel, null);
     }
 
@@ -699,12 +708,16 @@ public class DefaultMQPushConsumer extends ClientConfig implements MQPushConsume
     /**
      * This method gets internal infrastructure readily to serve. Instances must call this method after configuration.
      *
+     * 启动消费者
      * @throws MQClientException if there is any client error.
      */
     @Override
     public void start() throws MQClientException {
+        //根据namespace和consumerGroup设置消费者组
         setConsumerGroup(NamespaceUtil.wrapNamespace(this.getNamespace(), this.consumerGroup));
+        //默认消费者实现启动
         this.defaultMQPushConsumerImpl.start();
+        //消息轨迹跟踪服务，默认null
         if (null != traceDispatcher) {
             try {
                 traceDispatcher.start(this.getNamesrvAddr(), this.getAccessChannel());
@@ -756,10 +769,12 @@ public class DefaultMQPushConsumer extends ClientConfig implements MQPushConsume
 
     /**
      * Subscribe a topic to consuming subscription.
+     *  订阅topic，支持消息过滤表达式
      *
      * @param topic topic to subscribe.
      * @param subExpression subscription expression.it only support or operation such as "tag1 || tag2 || tag3" <br>
      * if null or * expression,meaning subscribe all
+     *                      订阅表达式。它仅支持或操作，如“tag1 | | tag2 | | tag3”，如果为 null 或 *，则表示订阅全部
      * @throws MQClientException if there is any client error.
      */
     @Override

@@ -153,29 +153,57 @@ public class TopicConfigManager extends ConfigManager {
         return this.topicConfigTable.get(topic);
     }
 
+    /**
+     * 该方法尝试创建一个新的topic，大概步骤为：
+     *
+     * 1. 首先需要获取锁防止并发创建相同的topic，获得锁之再次尝试从topicConfigTable获取topic信息，如果获取到了，那么直接返回。如果还是没有，那么创建topic。
+     * 2. 获取默认topic的信息，用于作为模板创建新topic，默认的默认topic实际上就是TBW102，其有8个读写队列，权限为读写并且可继承，即7。
+     * 3. 如果默认topic就是TBW102，并且如果broker配置不支持自动创建topic ，即autoCreateTopicEnable为false，那么设置权限为可读写，不可继承，即6。
+     * 4. 如果默认topic配置的权限包括可继承，那么从默认topic继承属性创建新topic。
+     *      4.1 新建一个TopicConfig对象，选择默认队列数量与默认topic写队列数中最小的值作为新topic的读写队列数量，默认为4。设置权限，去除可继承权限等操作。
+     * 5. 如果topic不为null，说明创建了新topic。将新的topic信息存入topicConfigTable缓存中，生成下一个数据版本，标识位置为true，
+     *      随后调用persist方法将topic配置持久化到配置文件 {user.home}/store/config/topics.json中。
+     * 6. 最后解锁，然后判断如果创建了新topic，那么马上调用registerBrokerAll方法向nameServer注册当前broker的新配置路由信息。
+     *
+     * @param topic                       待创建topic
+     * @param defaultTopic                默认topic，用于作为模板创建新topic
+     * @param remoteAddress               远程地址
+     * @param clientDefaultTopicQueueNums 自动创建服务器不存在的topic时，默认创建的队列数，默认为4
+     *                                    可通过生产者DefaultMQProducer的defaultTopicQueueNums属性进行配置
+     * @param topicSysFlag                topic标识
+     * @return topic配置
+     */
     public TopicConfig createTopicInSendMessageMethod(final String topic, final String defaultTopic,
         final String remoteAddress, final int clientDefaultTopicQueueNums, final int topicSysFlag) {
         TopicConfig topicConfig = null;
         boolean createNew = false;
 
         try {
+            //需要加锁防止并发创建相同的topic
             if (this.topicConfigTableLock.tryLock(LOCK_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)) {
                 try {
+                    //再次尝试从topicConfigTable获取topic信息，如果获取到了，那么直接返回
                     topicConfig = this.topicConfigTable.get(topic);
                     if (topicConfig != null)
                         return topicConfig;
 
+                    //获取默认topic的信息，用于作为模板创建新topic，默认的默认topic实际上就是TBW102，其有8个读写队列，权限为读写并且可继承，即7
                     TopicConfig defaultTopicConfig = this.topicConfigTable.get(defaultTopic);
                     if (defaultTopicConfig != null) {
+                        //如果默认topic就是TBW102
                         if (defaultTopic.equals(TopicValidator.AUTO_CREATE_TOPIC_KEY_TOPIC)) {
+                            //如果broker配置不支持自动创建topic，那么设置权限为可读写，不可继承，即6
                             if (!this.brokerController.getBrokerConfig().isAutoCreateTopicEnable()) {
                                 defaultTopicConfig.setPerm(PermName.PERM_READ | PermName.PERM_WRITE);
                             }
                         }
 
+                        //如果默认topic配置的权限包括可继承，那么从默认topic继承属性
                         if (PermName.isInherited(defaultTopicConfig.getPerm())) {
+                            //创建topic配置
                             topicConfig = new TopicConfig(topic);
 
+                            //选择默认队列数量与默认topic写队列数中最小的值作为新topic的读写队列数量，默认为4
                             int queueNums = Math.min(clientDefaultTopicQueueNums, defaultTopicConfig.getWriteQueueNums());
 
                             if (queueNums < 0) {
@@ -184,7 +212,9 @@ public class TopicConfigManager extends ConfigManager {
 
                             topicConfig.setReadQueueNums(queueNums);
                             topicConfig.setWriteQueueNums(queueNums);
+                            //权限
                             int perm = defaultTopicConfig.getPerm();
+                            //去掉可继承权限
                             perm &= ~PermName.PERM_INHERIT;
                             topicConfig.setPerm(perm);
                             topicConfig.setTopicSysFlag(topicSysFlag);
@@ -198,19 +228,25 @@ public class TopicConfigManager extends ConfigManager {
                             defaultTopic, remoteAddress);
                     }
 
+                    //如果topic不为null，说明创建了新topic
                     if (topicConfig != null) {
                         log.info("Create new topic by default topic:[{}] config:[{}] producer:[{}]",
                             defaultTopic, topicConfig, remoteAddress);
 
+                        //将新的topic信息存入topicConfigTable缓存中
                         this.topicConfigTable.put(topic, topicConfig);
-
+                        //标识位置为true
                         this.dataVersion.nextVersion();
 
                         createNew = true;
 
+                        /*
+                         * 将topic配置持久化到配置文件 {user.home}/store/config/topics.json中
+                         */
                         this.persist();
                     }
                 } finally {
+                    //解锁
                     this.topicConfigTableLock.unlock();
                 }
             }
@@ -219,42 +255,57 @@ public class TopicConfigManager extends ConfigManager {
         }
 
         if (createNew) {
+            //如果创建了新topic，那么马上向nameServer注册当前broker的新配置路由信息
             this.brokerController.registerBrokerAll(false, true, true);
         }
 
         return topicConfig;
     }
 
+    /**
+     * 该方法用于自动创建重试topic，其源码和创建普通topic差不多，区别就是重试topic不需要模板topic，默认读写队列数都是1，权限为读写。
+     *
+     */
     public TopicConfig createTopicInSendMessageBackMethod(
         final String topic,
         final int clientDefaultTopicQueueNums,
         final int perm,
         final int topicSysFlag) {
+        //尝试获取topic
         TopicConfig topicConfig = this.topicConfigTable.get(topic);
+        //如果存在则直接返回
         if (topicConfig != null)
             return topicConfig;
 
         boolean createNew = false;
 
         try {
+            //需要加锁防止并发创建相同的topic
             if (this.topicConfigTableLock.tryLock(LOCK_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)) {
                 try {
+                    //再次尝试从topicConfigTable获取topic信息，如果获取到了，那么直接返回
                     topicConfig = this.topicConfigTable.get(topic);
                     if (topicConfig != null)
                         return topicConfig;
-
+                    //创建topic
                     topicConfig = new TopicConfig(topic);
+
+                    //重试topic的默认读写队列数量为1
                     topicConfig.setReadQueueNums(clientDefaultTopicQueueNums);
                     topicConfig.setWriteQueueNums(clientDefaultTopicQueueNums);
+                    //重试topic的默认权限为读写
                     topicConfig.setPerm(perm);
                     topicConfig.setTopicSysFlag(topicSysFlag);
 
                     log.info("create new topic {}", topicConfig);
                     this.topicConfigTable.put(topic, topicConfig);
                     createNew = true;
+                    //获取下一个版本
                     this.dataVersion.nextVersion();
+                    //持久化broker信息
                     this.persist();
                 } finally {
+                    //解锁
                     this.topicConfigTableLock.unlock();
                 }
             }
@@ -263,6 +314,7 @@ public class TopicConfigManager extends ConfigManager {
         }
 
         if (createNew) {
+            //注册broker信息
             this.brokerController.registerBrokerAll(false, true, true);
         }
 

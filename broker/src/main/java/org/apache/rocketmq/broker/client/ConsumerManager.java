@@ -95,28 +95,53 @@ public class ConsumerManager {
         }
     }
 
+    /**
+     * ConsumerManager的方法
+     * <p>
+     * 注册consumer，返回consumer信息是否已发生改变
+     * 如果发生了改变，Broker会发送NOTIFY_CONSUMER_IDS_CHANGED请求给同组的所有consumer客户端，要求进行重平衡操作
+     *
+     * @param group                            消费者组
+     * @param clientChannelInfo                客户端连接信息
+     * @param consumeType                      消费类型，PULL or PUSH
+     * @param messageModel                     消息模式，集群 or 广播
+     * @param consumeFromWhere                 启动消费位置
+     * @param subList                          订阅信息数据
+     * @param isNotifyConsumerIdsChangedEnable 一个consumer改变时是否通知该consumergroup中的所有consumer进行重平衡
+     * @return 是否重平衡
+     */
     public boolean registerConsumer(final String group, final ClientChannelInfo clientChannelInfo,
         ConsumeType consumeType, MessageModel messageModel, ConsumeFromWhere consumeFromWhere,
         final Set<SubscriptionData> subList, boolean isNotifyConsumerIdsChangedEnable) {
 
+        //获取当前group对应的ConsumerGroupInfo
         ConsumerGroupInfo consumerGroupInfo = this.consumerTable.get(group);
+        //如果为null，那么新建一个ConsumerGroupInfo并存入consumerTable
         if (null == consumerGroupInfo) {
             ConsumerGroupInfo tmp = new ConsumerGroupInfo(group, consumeType, messageModel, consumeFromWhere);
             ConsumerGroupInfo prev = this.consumerTable.putIfAbsent(group, tmp);
             consumerGroupInfo = prev != null ? prev : tmp;
         }
 
+        /*
+         * 1 更新连接
+         */
         boolean r1 =
             consumerGroupInfo.updateChannel(clientChannelInfo, consumeType, messageModel,
                 consumeFromWhere);
+        /*
+         * 2 更新订阅信息
+         */
         boolean r2 = consumerGroupInfo.updateSubscription(subList);
 
         if (r1 || r2) {
             if (isNotifyConsumerIdsChangedEnable) {
+                //CHANGE事件
                 this.consumerIdsChangeListener.handle(ConsumerGroupEvent.CHANGE, group, consumerGroupInfo.getAllChannel());
             }
         }
 
+        //注册订阅信息到ConsumerFilterManager
         this.consumerIdsChangeListener.handle(ConsumerGroupEvent.REGISTER, group, subList);
 
         return r1 || r2;

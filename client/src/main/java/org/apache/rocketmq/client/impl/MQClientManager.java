@@ -44,11 +44,28 @@ public class MQClientManager {
         return getOrCreateMQClientInstance(clientConfig, null);
     }
 
+    /**
+     * 该方法会先生成clientId，格式为 clientIP@instanceName@unitName。
+     * 然后从本地缓存factoryTable中，查找该clientId的MQClientInstance实例。如果缓存中没有找到，则创建实例并存入缓存中。
+     *
+     * MQClientInstance封装了RocketMQ底层网络处理API，Producer、Consumer都会使用到这个类，是Producer、Consumer与NameServer、Broker 打交道的网络通道。
+     * 因此，同一个clientId对应同一个MQClientInstance实例就可以了，即同一个应用中的多个producer和consumer使用同一个MQClientInstance实例即可。
+     *
+     * @param clientConfig
+     * @param rpcHook
+     * @return
+     */
     public MQClientInstance getOrCreateMQClientInstance(final ClientConfig clientConfig, RPCHook rpcHook) {
+        /*
+         * 构建clientId，格式为 clientIP@instanceName@unitName
+         */
         String clientId = clientConfig.buildMQClientId();
+        //从本地缓存factoryTable中，查找该clientId的MQClientInstance实例
         MQClientInstance instance = this.factoryTable.get(clientId);
+        //如果不存在则创建并存入factoryTable
         if (null == instance) {
             instance =
+                    //创建MQClientInstance的时候，会初始化netty客户端，各种服务实例等等。
                 new MQClientInstance(clientConfig.cloneClientConfig(),
                     this.factoryIndexGenerator.getAndIncrement(), clientId, rpcHook);
             MQClientInstance prev = this.factoryTable.putIfAbsent(clientId, instance);

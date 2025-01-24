@@ -50,7 +50,9 @@ public class ResponseFuture {
 
     public void executeInvokeCallback() {
         if (invokeCallback != null) {
+            //通过cas保证只允许一次调用
             if (this.executeCallbackOnlyOnce.compareAndSet(false, true)) {
+                //执行回调器的回调方法operationComplete
                 invokeCallback.operationComplete(this);
             }
         }
@@ -67,13 +69,30 @@ public class ResponseFuture {
         return diff > this.timeoutMillis;
     }
 
+    /**
+     * CountDownLatch也被称为闭锁，它一般用来确保某些活动直到其他活动都完成才继续执行，ResponseFuture中的CountDownLatch的倒计数只有1。
+     * 调用putResponse方法的时候，该方法有两个调用点，一个是在ChannelFutureListener中判断请求发送失败的时候，直接设置一个null进去，
+     * 另一个就是请求正常处理完毕的时候，在processResponseCommand方法中会将执行结果设置进去。
+     *
+     * @param timeoutMillis
+     * @return
+     * @throws InterruptedException
+     */
     public RemotingCommand waitResponse(final long timeoutMillis) throws InterruptedException {
+        //使用countDownLatch等待给定的时间
         this.countDownLatch.await(timeoutMillis, TimeUnit.MILLISECONDS);
         return this.responseCommand;
     }
 
+    /**
+     * putResponse方法中会调用countDownLatch#countDown方法，此时倒计数为0，此前阻塞的请求线程将会
+     *
+     * @param responseCommand
+     */
     public void putResponse(final RemotingCommand responseCommand) {
+        //存入结果
         this.responseCommand = responseCommand;
+        //倒计数减去1，唤醒等待的线程
         this.countDownLatch.countDown();
     }
 

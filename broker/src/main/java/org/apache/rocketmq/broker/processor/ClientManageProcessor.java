@@ -50,11 +50,21 @@ public class ClientManageProcessor extends AsyncNettyRequestProcessor {
         this.brokerController = brokerController;
     }
 
+    /**
+     * 心跳请求的Code为HEART_BEAT，该请求最终被Broker的ClientManageProcessor处理器处理。
+     *
+     * @param ctx
+     * @param request
+     * @return
+     * @throws RemotingCommandException
+     */
     @Override
     public RemotingCommand processRequest(ChannelHandlerContext ctx, RemotingCommand request)
         throws RemotingCommandException {
         switch (request.getCode()) {
+            //客户端心跳请求
             case RequestCode.HEART_BEAT:
+                //客户端心跳请求
                 return this.heartBeat(ctx, request);
             case RequestCode.UNREGISTER_CLIENT:
                 return this.unregisterClient(ctx, request);
@@ -71,9 +81,25 @@ public class ClientManageProcessor extends AsyncNettyRequestProcessor {
         return false;
     }
 
+    /**
+     * Broker的ClientManageProcessor#heartBeat该方法用于Broker处理来自客户端（包括consumer和producer）的心跳请求。主要流程就是：
+     *
+     * 解码消息中的信息成为HeartbeatData对象
+     * 循环遍历处理consumerDataSet集合，对ConsumerData信息进行注册或者更改，
+     * 如果consumer信息发生了改变，Broker会发送NOTIFY_CONSUMER_IDS_CHANGED请求给同组的所有consumer客户端，要求进行重平衡操作。
+     * 循环遍历处理consumerDataSet集合，对 ProducerData信息进行注册或者更改。
+
+     *
+     * @param ctx
+     * @param request
+     * @return
+     */
     public RemotingCommand heartBeat(ChannelHandlerContext ctx, RemotingCommand request) {
+        //构建响应命令对象
         RemotingCommand response = RemotingCommand.createResponseCommand(null);
+        //解码
         HeartbeatData heartbeatData = HeartbeatData.decode(request.getBody(), HeartbeatData.class);
+        //构建客户端连接信息对象
         ClientChannelInfo clientChannelInfo = new ClientChannelInfo(
             ctx.channel(),
             heartbeatData.getClientID(),
@@ -81,17 +107,24 @@ public class ClientManageProcessor extends AsyncNettyRequestProcessor {
             request.getVersion()
         );
 
+        /*
+         * 1 循环遍历处理consumerDataSet，即处理consumer的心跳信息
+         */
         for (ConsumerData data : heartbeatData.getConsumerDataSet()) {
+            //查找broker缓存的当前消费者组的订阅组配置
             SubscriptionGroupConfig subscriptionGroupConfig =
                 this.brokerController.getSubscriptionGroupManager().findSubscriptionGroupConfig(
                     data.getGroupName());
             boolean isNotifyConsumerIdsChangedEnable = true;
+            //如果已存在订阅组
             if (null != subscriptionGroupConfig) {
+                //当consumer发生改变的时候是否支持通知同组的所有consumer，默认true，即支持
                 isNotifyConsumerIdsChangedEnable = subscriptionGroupConfig.isNotifyConsumerIdsChangedEnable();
                 int topicSysFlag = 0;
                 if (data.isUnitMode()) {
                     topicSysFlag = TopicSysFlag.buildSysFlag(false, true);
                 }
+                //尝试创建重试topic
                 String newTopic = MixAll.getRetryTopic(data.getGroupName());
                 this.brokerController.getTopicConfigManager().createTopicInSendMessageBackMethod(
                     newTopic,
@@ -99,6 +132,10 @@ public class ClientManageProcessor extends AsyncNettyRequestProcessor {
                     PermName.PERM_WRITE | PermName.PERM_READ, topicSysFlag);
             }
 
+            /*
+             * 注册consumer，返回consumer信息是否已发生改变
+             * 如果发生了改变，Broker会发送NOTIFY_CONSUMER_IDS_CHANGED请求给同组的所有consumer客户端，要求进行重平衡操作
+             */
             boolean changed = this.brokerController.getConsumerManager().registerConsumer(
                 data.getGroupName(),
                 clientChannelInfo,
@@ -117,10 +154,17 @@ public class ClientManageProcessor extends AsyncNettyRequestProcessor {
             }
         }
 
+        /*
+         * 2 循环遍历处理producerDataSet，即处理producer的心跳信息
+         */
         for (ProducerData data : heartbeatData.getProducerDataSet()) {
+            /*
+             * 注册producer
+             */
             this.brokerController.getProducerManager().registerProducer(data.getGroupName(),
                 clientChannelInfo);
         }
+        //返回响应
         response.setCode(ResponseCode.SUCCESS);
         response.setRemark(null);
         return response;

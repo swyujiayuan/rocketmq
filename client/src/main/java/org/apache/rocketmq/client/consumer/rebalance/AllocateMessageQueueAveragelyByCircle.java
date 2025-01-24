@@ -25,16 +25,24 @@ import org.apache.rocketmq.common.message.MessageQueue;
  */
 public class AllocateMessageQueueAveragelyByCircle extends AbstractAllocateMessageQueueStrategy {
 
+    /**
+     * 按照消费者的顺序进行一轮一轮的分配，直到分配完所有消息队列。
+     * 例如有消费者A、B，有5个消息队列1、2、3、4、5。第一轮A分配1，B分配2；第二轮A分配3，B分配4；第二轮A分配5。因此A分配到1、3、5，B分配到2、4。
+     *
+     */
     @Override
     public List<MessageQueue> allocate(String consumerGroup, String currentCID, List<MessageQueue> mqAll,
         List<String> cidAll) {
 
         List<MessageQueue> result = new ArrayList<MessageQueue>();
+        //参数校验
         if (!check(consumerGroup, currentCID, mqAll, cidAll)) {
             return result;
         }
 
+        //索引
         int index = cidAll.indexOf(currentCID);
+        //获取每个分配轮次轮次中属于该消费者的对应的消息队列
         for (int i = index; i < mqAll.size(); i++) {
             if (i % cidAll.size() == index) {
                 result.add(mqAll.get(i));

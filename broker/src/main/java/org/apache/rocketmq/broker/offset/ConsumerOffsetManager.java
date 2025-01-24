@@ -118,6 +118,19 @@ public class ConsumerOffsetManager extends ConfigManager {
         return groups;
     }
 
+    /**
+     * 这里提交偏移量实际上就是将新的偏移量存入ConsumerOffsetManager的offsetTable中。
+     * 该缓存对应着磁盘上的{user.home}/store/config/consumerOffset.json文件。这里实际上是存入到内存中的，并没有持久化。
+     *
+     * roker启动过程中，在BrokerController#initialize方法中会启动一些定时调度任务，
+     * 其中有一个任务每隔5s将消费者offset进行持久化（offsetTable中的数据），存入consumerOffset.json文件中。
+     *
+     * @param clientHost
+     * @param group
+     * @param topic
+     * @param queueId
+     * @param offset
+     */
     public void commitOffset(final String clientHost, final String group, final String topic, final int queueId,
         final long offset) {
         // topic@group
@@ -125,13 +138,25 @@ public class ConsumerOffsetManager extends ConfigManager {
         this.commitOffset(clientHost, key, queueId, offset);
     }
 
+    /**
+     * ConsumerOffsetManager的方法
+     * 提交偏移量
+     *
+     * @param clientHost 客户端地址
+     * @param key        缓存key
+     * @param queueId    队列id
+     * @param offset     提交的偏移量
+     */
     private void commitOffset(final String clientHost, final String key, final int queueId, final long offset) {
+        //获取topic@group对应的所有queue的消费偏移量map
         ConcurrentMap<Integer, Long> map = this.offsetTable.get(key);
         if (null == map) {
             map = new ConcurrentHashMap<Integer, Long>(32);
+            //存入map，key为queueId value为offSet
             map.put(queueId, offset);
             this.offsetTable.put(key, map);
         } else {
+            //存入map，key为queueId value为offSet
             Long storeOffset = map.put(queueId, offset);
             if (storeOffset != null && offset < storeOffset) {
                 log.warn("[NOTIFYME]update consumer offset less than store. clientHost={}, key={}, queueId={}, requestOffset={}, storeOffset={}", clientHost, key, queueId, offset, storeOffset);
@@ -156,6 +181,11 @@ public class ConsumerOffsetManager extends ConfigManager {
         return this.encode(false);
     }
 
+    /**
+     *
+     * 获取存储路径
+     * @return
+     */
     @Override
     public String configFilePath() {
         return BrokerPathConfigHelper.getConsumerOffsetPath(this.brokerController.getMessageStoreConfig().getStorePathRootDir());
@@ -171,6 +201,7 @@ public class ConsumerOffsetManager extends ConfigManager {
         }
     }
 
+    // 序列化消费进度
     public String encode(final boolean prettyFormat) {
         return RemotingSerializable.toJson(this, prettyFormat);
     }

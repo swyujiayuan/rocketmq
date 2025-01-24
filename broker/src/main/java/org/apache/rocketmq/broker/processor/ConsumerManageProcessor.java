@@ -51,10 +51,13 @@ public class ConsumerManageProcessor extends AsyncNettyRequestProcessor {
         throws RemotingCommandException {
         switch (request.getCode()) {
             case RequestCode.GET_CONSUMER_LIST_BY_GROUP:
+                //返回指定group的所有客户端id集合
                 return this.getConsumerListByGroup(ctx, request);
             case RequestCode.UPDATE_CONSUMER_OFFSET:
+                //更新消费偏移量
                 return this.updateConsumerOffset(ctx, request);
             case RequestCode.QUERY_CONSUMER_OFFSET:
+                //查询消费偏移量
                 return this.queryConsumerOffset(ctx, request);
             default:
                 break;
@@ -67,18 +70,27 @@ public class ConsumerManageProcessor extends AsyncNettyRequestProcessor {
         return false;
     }
 
+    /**
+     * ConsumerManageProcessor的方法
+     * <p>
+     * 返回指定group的所有客户端id集合
+     */
     public RemotingCommand getConsumerListByGroup(ChannelHandlerContext ctx, RemotingCommand request)
         throws RemotingCommandException {
+        //创建响应命令对象
         final RemotingCommand response =
             RemotingCommand.createResponseCommand(GetConsumerListByGroupResponseHeader.class);
+        //解析请求头
         final GetConsumerListByGroupRequestHeader requestHeader =
             (GetConsumerListByGroupRequestHeader) request
                 .decodeCommandCustomHeader(GetConsumerListByGroupRequestHeader.class);
 
+        //从broker的consumerTable中获取指定group的消费者组信息
         ConsumerGroupInfo consumerGroupInfo =
             this.brokerController.getConsumerManager().getConsumerGroupInfo(
                 requestHeader.getConsumerGroup());
         if (consumerGroupInfo != null) {
+            //获取所有客户端id集合
             List<String> clientIds = consumerGroupInfo.getAllClientId();
             if (!clientIds.isEmpty()) {
                 GetConsumerListByGroupResponseBody body = new GetConsumerListByGroupResponseBody();
@@ -108,6 +120,11 @@ public class ConsumerManageProcessor extends AsyncNettyRequestProcessor {
         final UpdateConsumerOffsetRequestHeader requestHeader =
             (UpdateConsumerOffsetRequestHeader) request
                 .decodeCommandCustomHeader(UpdateConsumerOffsetRequestHeader.class);
+        /*
+         * 这里提交偏移量实际上就是将新的偏移量存入ConsumerOffsetManager内部的offsetTable中。
+         * 该缓存对应着磁盘上的{user.home}/store/config/consumerOffset.json文件。这里实际上是存入到内存中的，并没有持久化。
+         *
+         */
         this.brokerController.getConsumerOffsetManager().commitOffset(RemotingHelper.parseChannelRemoteAddr(ctx.channel()), requestHeader.getConsumerGroup(),
             requestHeader.getTopic(), requestHeader.getQueueId(), requestHeader.getCommitOffset());
         response.setCode(ResponseCode.SUCCESS);
@@ -115,8 +132,22 @@ public class ConsumerManageProcessor extends AsyncNettyRequestProcessor {
         return response;
     }
 
+    /**
+     * queryConsumerOffset方法用于broker查询消费者偏移量。
+     *
+     * 1. 首先根据 ConsumerGroup、Topic、QueueId是从broker端的offsetTable这个map集合缓存属性中获取缓存的消费偏移offset。
+     * 2. 如果offset大于等于0，则直接返回，否则表示缓存中没有对应的消费记录，
+     * 那么集训判断如果消费队列最新偏移量小于等于0，并且该消费队列的0偏移量数据还在内存中，表示为新消息队列并且消息未清理过，
+     * 并且数据量不是很大。此时，将offset设置为0并返回。否则，将会设置QUERY_NOT_FOUND，最后被解析为-1。
+     *
+     * 从该方法源码可以看出来，消费的consumeFromWhere设置可能不准确，
+     * 例如一个新的topic里面有少量消息，此时新启动一个consumerGroup去消费，
+     * 即使consumeFromWhere设置为CONSUME_FROM_LAST_OFFSET，仍然会从0（从头）开始消费。
+
+     */
     private RemotingCommand queryConsumerOffset(ChannelHandlerContext ctx, RemotingCommand request)
         throws RemotingCommandException {
+        //响应对象
         final RemotingCommand response =
             RemotingCommand.createResponseCommand(QueryConsumerOffsetResponseHeader.class);
         final QueryConsumerOffsetResponseHeader responseHeader =
@@ -125,25 +156,34 @@ public class ConsumerManageProcessor extends AsyncNettyRequestProcessor {
             (QueryConsumerOffsetRequestHeader) request
                 .decodeCommandCustomHeader(QueryConsumerOffsetRequestHeader.class);
 
+        //根据 ConsumerGroup、Topic、QueueId 查询offset，实际上是从broker端的offsetTable这个map集合缓存属性中获取
+        //在broker启动时就从broker的{user.home}/store/config/consumerOffset.json中加载
         long offset =
             this.brokerController.getConsumerOffsetManager().queryOffset(
                 requestHeader.getConsumerGroup(), requestHeader.getTopic(), requestHeader.getQueueId());
 
         if (offset >= 0) {
+            //大于等于0，则存入响应结果返回
             responseHeader.setOffset(offset);
             response.setCode(ResponseCode.SUCCESS);
             response.setRemark(null);
-        } else {
+        }
+        //小于0表示在offsetTable缓存中没找到
+        else {
+            //根据topic和queueId获取消费队列ConsumeQueue的最小的逻辑偏移量offset
             long minOffset =
                 this.brokerController.getMessageStore().getMinOffsetInQueue(requestHeader.getTopic(),
                     requestHeader.getQueueId());
+            //如果消费队列最新偏移量小于等于0，并且该消费队列的0偏移量数据还在内存中，表示为新消息队列并且消息未清理过，并且数据量不是很大
             if (minOffset <= 0
                 && !this.brokerController.getMessageStore().checkInDiskByConsumeOffset(
                 requestHeader.getTopic(), requestHeader.getQueueId(), 0)) {
+                //返回0，从0开始读取消费
                 responseHeader.setOffset(0L);
                 response.setCode(ResponseCode.SUCCESS);
                 response.setRemark(null);
             } else {
+                //-1
                 response.setCode(ResponseCode.QUERY_NOT_FOUND);
                 response.setRemark("Not found, V3_0_6_SNAPSHOT maybe this group consumer boot first");
             }

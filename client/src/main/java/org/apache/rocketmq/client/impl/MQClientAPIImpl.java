@@ -247,7 +247,14 @@ public class MQClientAPIImpl {
         this.remotingClient.updateNameServerAddressList(list);
     }
 
+    /**
+     * 该方法创建一个netty客户端，以及两个定时任务和netty事件监听器，
+     * 注意并没有真正执行netty客户端的connect连接操作。
+     *
+     */
     public void start() {
+        //调用NettyRemotingClient#start
+        // NettyRemotingClient属于remoting包下面的类，该类被其他模块例如broker共同使用。
         this.remotingClient.start();
     }
 
@@ -449,6 +456,28 @@ public class MQClientAPIImpl {
         return sendMessage(addr, brokerName, msg, requestHeader, timeoutMillis, communicationMode, null, null, null, 0, context, producer);
     }
 
+    /**
+     *
+     * 1. 首先构建发送消息命令对象RemotingCommand，此时会判断是否需要更换轻量级消息头，
+     * 如果sendSmartMsg属性为true（默认为true）或者是批量消息，则使用轻量级消息头。
+     * SendMessageRequestHeaderV2相比于requestHeader，其field 全为 a,b,c,d 等短变量名，可以加快FastJson反序列化过程。
+     * 2. 根据发送模式执行不同的发送逻辑。单向发送模式调用RemotingClient#invokeOneway方法；
+     * 异步发送模式调用MQClientAPIImpl#sendMessageAsync方法；同步发送模式调用MQClientAPIImpl#sendMessageSync方法。
+     * 在异步和同步模式发送方法的调用前还会再检查是否超时，如果超时则不再调用。
+     *
+     * @param addr                     brokerAddr
+     * @param brokerName               brokerName
+     * @param msg                      msg
+     * @param requestHeader            requestHeader
+     * @param timeoutMillis            剩余超时时间
+     * @param communicationMode        发送模式
+     * @param sendCallback             发送回调函数
+     * @param topicPublishInfo         topic信息
+     * @param instance                 MQClientInstance
+     * @param retryTimesWhenSendFailed 异步发送失败时的重试次数，默认2
+     * @param context                  发送消息上下文
+     * @param producer                 DefaultMQProducerImpl
+     */
     public SendResult sendMessage(
         final String addr,
         final String brokerName,
@@ -463,45 +492,78 @@ public class MQClientAPIImpl {
         final SendMessageContext context,
         final DefaultMQProducerImpl producer
     ) throws RemotingException, MQBrokerException, InterruptedException {
+
         long beginStartTime = System.currentTimeMillis();
         RemotingCommand request = null;
+        //消息类型
         String msgType = msg.getProperty(MessageConst.PROPERTY_MESSAGE_TYPE);
+        //是否时重试消息
         boolean isReply = msgType != null && msgType.equals(MixAll.REPLY_MESSAGE_FLAG);
+
+        /*
+         * 1 构建发送消息命令对象RemotingCommand，轻量级消息头
+         *
+         * sendSmartMsg表示是否使用更轻量级的消息头SendMessageRequestHeaderV2
+         * 相比于requestHeader，其field 全为 a,b,c,d 等短变量名，可以加快FastJson反序列化过程。
+         */
         if (isReply) {
+            //sendSmartMsg默认为true
             if (sendSmartMsg) {
+                //构建轻量级消息头
                 SendMessageRequestHeaderV2 requestHeaderV2 = SendMessageRequestHeaderV2.createSendMessageRequestHeaderV2(requestHeader);
+                //创建发送消息命令对象，RequestCode为SEND_REPLY_MESSAGE_V2
                 request = RemotingCommand.createRequestCommand(RequestCode.SEND_REPLY_MESSAGE_V2, requestHeaderV2);
             } else {
+                //创建发送消息命令对象，RequestCode为SEND_REPLY_MESSAGE
                 request = RemotingCommand.createRequestCommand(RequestCode.SEND_REPLY_MESSAGE, requestHeader);
             }
         } else {
             if (sendSmartMsg || msg instanceof MessageBatch) {
+                //构建轻量级消息头
                 SendMessageRequestHeaderV2 requestHeaderV2 = SendMessageRequestHeaderV2.createSendMessageRequestHeaderV2(requestHeader);
+                //如果是批量消息，则RequestCode为SEND_BATCH_MESSAGE，否则RequestCode为SEND_MESSAGE_V2
                 request = RemotingCommand.createRequestCommand(msg instanceof MessageBatch ? RequestCode.SEND_BATCH_MESSAGE : RequestCode.SEND_MESSAGE_V2, requestHeaderV2);
             } else {
+                //创建发送消息命令对象，RequestCode为SEND_MESSAGE
                 request = RemotingCommand.createRequestCommand(RequestCode.SEND_MESSAGE, requestHeader);
             }
         }
+        //设置body
         request.setBody(msg.getBody());
 
+        /*
+         * 2 根据发送模式执行不同的发送逻辑
+         */
         switch (communicationMode) {
             case ONEWAY:
+                /*
+                 * 单向发送，调用该方法之后不接收返回值，直接返回null
+                 */
                 this.remotingClient.invokeOneway(addr, request, timeoutMillis);
                 return null;
             case ASYNC:
+                //异步消息重试计数器
                 final AtomicInteger times = new AtomicInteger();
+                //计算是否超时，如果超时则不再发送
                 long costTimeAsync = System.currentTimeMillis() - beginStartTime;
                 if (timeoutMillis < costTimeAsync) {
                     throw new RemotingTooMuchRequestException("sendMessage call timeout");
                 }
+                /*
+                 * 异步发送，调用该方法之后不接收返回值，直接返回null
+                 */
                 this.sendMessageAsync(addr, brokerName, msg, timeoutMillis - costTimeAsync, request, sendCallback, topicPublishInfo, instance,
                     retryTimesWhenSendFailed, times, context, producer);
                 return null;
             case SYNC:
+                //计算是否超时，如果超时则不再发送
                 long costTimeSync = System.currentTimeMillis() - beginStartTime;
                 if (timeoutMillis < costTimeSync) {
                     throw new RemotingTooMuchRequestException("sendMessage call timeout");
                 }
+                /*
+                 * 同步发送，调用该方法之后阻塞直至收到返回值
+                 */
                 return this.sendMessageSync(addr, brokerName, msg, timeoutMillis - costTimeSync, request);
             default:
                 assert false;
@@ -511,6 +573,10 @@ public class MQClientAPIImpl {
         return null;
     }
 
+    /**
+     * 该模式下，发送之后会同步阻塞直到结果返回。
+     *
+     */
     private SendResult sendMessageSync(
         final String addr,
         final String brokerName,
@@ -518,11 +584,33 @@ public class MQClientAPIImpl {
         final long timeoutMillis,
         final RemotingCommand request
     ) throws RemotingException, MQBrokerException, InterruptedException {
+        /*
+         * 发送同步消息
+         * 其内部调用NettyRemotingClient#invokeSync方法执行同步调用
+         */
         RemotingCommand response = this.remotingClient.invokeSync(addr, request, timeoutMillis);
         assert response != null;
+        /*
+         * 处理响应结果
+         */
         return this.processSendResponse(brokerName, msg, response, addr);
     }
 
+
+    /**
+     * 该模式下，调用该方法之后不接收返回值，直接返回null，执行完毕之后会自动执行回调函数operationComplete。异步发送同样支持重试。
+     *
+     * 调用异步发送方法传递的SendCallback对象并不会被直接调用，而是会被封装为另一个内部回调对象InvokeCallback，
+     * 当异步请求获得响应结果，或者超时时间到了之后，会回调它的operationComplete方法。
+     *
+     * 该方法中会调用processSendResponse方法解析响应结果为SendResult，
+     * 如果是响应成功的状态，那么接着执行sendCallback的onSuccess方法，这里的sendCallback就是发送消息时传入的回调函数。
+     *
+     * 随后会调用updateFaultItem更新本地更新本地错误表缓存数据，用于延迟时间的故障转移的功能。
+     *
+     * 如果抛出了异常，或者没有获取到broker的返回值，那么调用onExceptionImpl方法处理异常，该方法中会继续重试异步调用，这就是异步发送消息重试的逻辑。
+
+     */
     private void sendMessageAsync(
         final String addr,
         final String brokerName,
@@ -537,16 +625,28 @@ public class MQClientAPIImpl {
         final SendMessageContext context,
         final DefaultMQProducerImpl producer
     ) {
+        //起始时间
         final long beginStartTime = System.currentTimeMillis();
         try {
+            /*
+             * 发送异步消息，设置一个InvokeCallback回调对象
+             *
+             * InvokeCallback#operationComplete方法将会在得到结果之后进行回调
+             */
             this.remotingClient.invokeAsync(addr, request, timeoutMillis, new InvokeCallback() {
+                /**
+                 * 异步执行的回调方法
+                 */
                 @Override
                 public void operationComplete(ResponseFuture responseFuture) {
+                    //花费的时间
                     long cost = System.currentTimeMillis() - beginStartTime;
                     RemotingCommand response = responseFuture.getResponseCommand();
+                    //如果没有设置回调函数
                     if (null == sendCallback && response != null) {
 
                         try {
+                            //调用processSendResponse方法处理响应结果
                             SendResult sendResult = MQClientAPIImpl.this.processSendResponse(brokerName, msg, response, addr);
                             if (context != null && sendResult != null) {
                                 context.setSendResult(sendResult);
@@ -554,38 +654,48 @@ public class MQClientAPIImpl {
                             }
                         } catch (Throwable e) {
                         }
-
+                        //更新本地错误表缓存数据，用于延迟时间的故障转移的功能
                         producer.updateFaultItem(brokerName, System.currentTimeMillis() - responseFuture.getBeginTimestamp(), false);
                         return;
                     }
 
+                    //如果存在响应结果
                     if (response != null) {
                         try {
+                            //调用processSendResponse方法处理响应结果
                             SendResult sendResult = MQClientAPIImpl.this.processSendResponse(brokerName, msg, response, addr);
                             assert sendResult != null;
                             if (context != null) {
                                 context.setSendResult(sendResult);
+                                //执行消息发送之后的钩子函数，即SendMessageHook#sendMessageAfter方法
                                 context.getProducer().executeSendMessageHookAfter(context);
                             }
 
                             try {
+                                //响应成功时调用，执行sendCallback的onSuccess方法
+                                //这里的sendCallback就是发送消息时传入的回调函数
                                 sendCallback.onSuccess(sendResult);
                             } catch (Throwable e) {
                             }
-
+                            //更新本地错误表缓存数据，用于延迟时间的故障转移的功能
                             producer.updateFaultItem(brokerName, System.currentTimeMillis() - responseFuture.getBeginTimestamp(), false);
                         } catch (Exception e) {
+                            //异常处理，不需要重试
                             producer.updateFaultItem(brokerName, System.currentTimeMillis() - responseFuture.getBeginTimestamp(), true);
                             onExceptionImpl(brokerName, msg, timeoutMillis - cost, request, sendCallback, topicPublishInfo, instance,
                                 retryTimesWhenSendFailed, times, e, context, false, producer);
                         }
                     } else {
+                        //更新本地错误表缓存数据，用于延迟时间的故障转移的功能
                         producer.updateFaultItem(brokerName, System.currentTimeMillis() - responseFuture.getBeginTimestamp(), true);
+                        //异常处理，需要重试
+                        //发送失败
                         if (!responseFuture.isSendRequestOK()) {
                             MQClientException ex = new MQClientException("send request failed", responseFuture.getCause());
                             onExceptionImpl(brokerName, msg, timeoutMillis - cost, request, sendCallback, topicPublishInfo, instance,
                                 retryTimesWhenSendFailed, times, ex, context, true, producer);
                         } else if (responseFuture.isTimeout()) {
+                            //超时
                             MQClientException ex = new MQClientException("wait response timeout " + responseFuture.getTimeoutMillis() + "ms",
                                 responseFuture.getCause());
                             onExceptionImpl(brokerName, msg, timeoutMillis - cost, request, sendCallback, topicPublishInfo, instance,
@@ -600,12 +710,35 @@ public class MQClientAPIImpl {
             });
         } catch (Exception ex) {
             long cost = System.currentTimeMillis() - beginStartTime;
+            //更新本地错误表缓存数据，用于延迟时间的故障转移的功能
             producer.updateFaultItem(brokerName, cost, true);
+            // 处理异常
             onExceptionImpl(brokerName, msg, timeoutMillis - cost, request, sendCallback, topicPublishInfo, instance,
                     retryTimesWhenSendFailed, times, ex, context, true, producer);
         }
     }
 
+    /**
+     * 异步调用如果发生了异常，例如broker返回了错入的响应，或者没有获得响应，那会会执行onExceptionImpl这个异常处理方法。
+     *
+     * 可以看到，所谓的重试实际上就是重复的调用sendMessageAsync方法。
+     * 重试之前，首先会判断本次重试的次数是否大于重试总次数，参数为retryTimesWhenSendFailed，默认2次。
+     * 如果超过了最大重试次数，那么便不会重试，而是执行sendCallback#onException方法
+     *
+     * @param brokerName
+     * @param msg
+     * @param timeoutMillis
+     * @param request
+     * @param sendCallback
+     * @param topicPublishInfo
+     * @param instance
+     * @param timesTotal
+     * @param curTimes
+     * @param e
+     * @param context
+     * @param needRetry
+     * @param producer
+     */
     private void onExceptionImpl(final String brokerName,
         final Message msg,
         final long timeoutMillis,
@@ -620,33 +753,48 @@ public class MQClientAPIImpl {
         final boolean needRetry,
         final DefaultMQProducerImpl producer
     ) {
+        //重试次数加1并获取
         int tmp = curTimes.incrementAndGet();
+        /*
+         * 如果需要重试，并且本次重试次数小于等于总次数
+         */
         if (needRetry && tmp <= timesTotal) {
+            //保存brokerName，异步重试将会发送到相同的broker
             String retryBrokerName = brokerName;//by default, it will send to the same broker
             if (topicPublishInfo != null) { //select one message queue accordingly, in order to determine which broker to send
+                //选择一个消息队列
                 MessageQueue mqChosen = producer.selectOneMessageQueue(topicPublishInfo, brokerName);
                 retryBrokerName = mqChosen.getBrokerName();
             }
             String addr = instance.findBrokerAddressInPublish(retryBrokerName);
             log.warn("async send msg by retry {} times. topic={}, brokerAddr={}, brokerName={}", tmp, msg.getTopic(), addr,
                     retryBrokerName, e);
+            //设置请求id，通过id可以获取请求结果
             request.setOpaque(RemotingCommand.createNewRequestId());
+            //调用sendMessageAsync再次发送异步消息
             sendMessageAsync(addr, retryBrokerName, msg, timeoutMillis, request, sendCallback, topicPublishInfo, instance,
                     timesTotal, curTimes, context, producer);
         } else {
 
+            //如果本次重试次数大于总次数
             if (context != null) {
                 context.setException(e);
                 context.getProducer().executeSendMessageHookAfter(context);
             }
 
             try {
+                //最后执行sendCallback的onException方法
                 sendCallback.onException(e);
             } catch (Exception ignored) {
             }
         }
     }
 
+    /**
+     * 获得响应之后，调用processSendResponse方法处理响应结果，主要就是进行响应码的对应封装操作，然后对发送正常和异常情况分别进行不同的处理并返回sendResult对象。
+     *
+     * 从源码中可以看到，sendResult的构造器中，将会设置客户端生成的uniqMsgId为msgId属性，设置broker生成的MsgId为offsetMsgId属性。
+     */
     private SendResult processSendResponse(
         final String brokerName,
         final Message msg,
@@ -654,6 +802,7 @@ public class MQClientAPIImpl {
         final String addr
     ) throws MQBrokerException, RemotingCommandException {
         SendStatus sendStatus;
+        //根据responseCode设置对应的SendStatus
         switch (response.getCode()) {
             case ResponseCode.FLUSH_DISK_TIMEOUT: {
                 sendStatus = SendStatus.FLUSH_DISK_TIMEOUT;
@@ -676,17 +825,21 @@ public class MQClientAPIImpl {
             }
         }
 
+        //获取响应头
         SendMessageResponseHeader responseHeader =
             (SendMessageResponseHeader) response.decodeCommandCustomHeader(SendMessageResponseHeader.class);
 
         //If namespace not null , reset Topic without namespace.
+        //如果命名空间不为null，重置不带命名空间的topic
         String topic = msg.getTopic();
         if (StringUtils.isNotEmpty(this.clientConfig.getNamespace())) {
             topic = NamespaceUtil.withoutNamespace(topic, this.clientConfig.getNamespace());
         }
 
+        //新建一个MessageQueue，设置属性
         MessageQueue messageQueue = new MessageQueue(topic, brokerName, responseHeader.getQueueId());
 
+        //获取客户端生成的uniqId
         String uniqMsgId = MessageClientIDSetter.getUniqID(msg);
         if (msg instanceof MessageBatch) {
             StringBuilder sb = new StringBuilder();
@@ -695,10 +848,13 @@ public class MQClientAPIImpl {
             }
             uniqMsgId = sb.toString();
         }
+        //新建SendResult，即最终返回的对象，设置客户端生成的uniqMsgId为msgId属性，设置broker生成的MsgId为offsetMsgId属性
         SendResult sendResult = new SendResult(sendStatus,
             uniqMsgId,
             responseHeader.getMsgId(), messageQueue, responseHeader.getQueueOffset());
+        //设置事务id
         sendResult.setTransactionId(responseHeader.getTransactionId());
+        //设置regionId和traceOn
         String regionId = response.getExtFields().get(MessageConst.PROPERTY_MSG_REGION);
         String traceOn = response.getExtFields().get(MessageConst.PROPERTY_TRACE_SWITCH);
         if (regionId == null || regionId.isEmpty()) {
@@ -713,6 +869,19 @@ public class MQClientAPIImpl {
         return sendResult;
     }
 
+    /**
+     * MQClientAPIImpl的方法
+     *
+     * @param addr              broker地址
+     * @param requestHeader     请求头
+     * @param timeoutMillis     消费者消息拉取超时时间，默认30s
+     * @param communicationMode 消息拉取模式，默认为异步拉取
+     * @param pullCallback      拉取到消息之后调用的回调函数
+     * @return 拉取结果
+     * @throws RemotingException
+     * @throws MQBrokerException
+     * @throws InterruptedException
+     */
     public PullResult pullMessage(
         final String addr,
         final PullMessageRequestHeader requestHeader,
@@ -722,11 +891,13 @@ public class MQClientAPIImpl {
     ) throws RemotingException, MQBrokerException, InterruptedException {
         RemotingCommand request = RemotingCommand.createRequestCommand(RequestCode.PULL_MESSAGE, requestHeader);
 
+        //构建请求命令对象，请求Code为PULL_MESSAGE
         switch (communicationMode) {
             case ONEWAY:
                 assert false;
                 return null;
             case ASYNC:
+                //push模式默认异步拉取消息
                 this.pullMessageAsync(addr, request, timeoutMillis, pullCallback);
                 return null;
             case SYNC:
@@ -739,28 +910,54 @@ public class MQClientAPIImpl {
         return null;
     }
 
+    /**
+     * push消费模式默认异步拉取消息，即调用pullMessageAsync方法拉取消息。
+     *
+     * 该方法内部调用remotingClient.invokeAsync方法，基于netty给broker发送异步消息，设置一个InvokeCallback回调对象。
+     *
+     * InvokeCallback#operationComplete方法将会在得到结果之后进行回调，内部调用pullCallback的回调方法。
+     *
+     * 在回调方法中，如果解析到了响应结果，那么调用pullCallback#onSuccess方法处理，否则调用pullCallback#onException方法处理。
+     *
+     * @param addr          broker地址
+     * @param request       请求命令对象
+     * @param timeoutMillis 消费者消息拉取超时时间，默认30s
+     * @param pullCallback  拉取到消息之后调用的回调函数
+     */
     private void pullMessageAsync(
         final String addr,
         final RemotingCommand request,
         final long timeoutMillis,
         final PullCallback pullCallback
     ) throws RemotingException, InterruptedException {
+        /*
+         * 基于netty给broker发送异步消息，设置一个InvokeCallback回调对象
+         *
+         * InvokeCallback#operationComplete方法将会在得到结果之后进行回调，内部调用pullCallback的回调方法
+         */
         this.remotingClient.invokeAsync(addr, request, timeoutMillis, new InvokeCallback() {
             @Override
             public void operationComplete(ResponseFuture responseFuture) {
+                //返回命令对象
                 RemotingCommand response = responseFuture.getResponseCommand();
                 if (response != null) {
                     try {
+                        //解析响应获取结果
                         PullResult pullResult = MQClientAPIImpl.this.processPullResponse(response, addr);
                         assert pullResult != null;
+                        //如果解析到了结果，那么调用pullCallback#onSuccess方法处理
                         pullCallback.onSuccess(pullResult);
                     } catch (Exception e) {
+                        //出现异常则调用pullCallback#onException方法处理异常
                         pullCallback.onException(e);
                     }
                 } else {
+                    //没有结果，都调用onException方法处理异常
                     if (!responseFuture.isSendRequestOK()) {
+                        //发送失败
                         pullCallback.onException(new MQClientException("send request failed to " + addr + ". Request: " + request, responseFuture.getCause()));
                     } else if (responseFuture.isTimeout()) {
+                        //超时
                         pullCallback.onException(new MQClientException("wait response from " + addr + " timeout :" + responseFuture.getTimeoutMillis() + "ms" + ". Request: " + request,
                             responseFuture.getCause()));
                     } else {
@@ -781,10 +978,16 @@ public class MQClientAPIImpl {
         return this.processPullResponse(response, addr);
     }
 
+    /**
+     * MQClientAPIImpl的方法
+     * 处理response获取PullResult
+     * 根据响应的数据创建PullResultExt对象返回，注意此时拉取到的消息还是一个字节数组
+     */
     private PullResult processPullResponse(
         final RemotingCommand response,
         final String addr) throws MQBrokerException, RemotingCommandException {
         PullStatus pullStatus = PullStatus.NO_NEW_MSG;
+        //设置结果状态码
         switch (response.getCode()) {
             case ResponseCode.SUCCESS:
                 pullStatus = PullStatus.FOUND;
@@ -803,9 +1006,11 @@ public class MQClientAPIImpl {
                 throw new MQBrokerException(response.getCode(), response.getRemark(), addr);
         }
 
+        //解析响应头
         PullMessageResponseHeader responseHeader =
             (PullMessageResponseHeader) response.decodeCommandCustomHeader(PullMessageResponseHeader.class);
 
+        //根据响应的数据创建PullResultExt对象返回，此时拉取到的消息还是一个字节数组
         return new PullResultExt(pullStatus, responseHeader.getNextBeginOffset(), responseHeader.getMinOffset(),
             responseHeader.getMaxOffset(), null, responseHeader.getSuggestWhichBrokerId(), response.getBody());
     }
@@ -836,6 +1041,18 @@ public class MQClientAPIImpl {
         throw new MQBrokerException(response.getCode(), response.getRemark(), addr);
     }
 
+    /**
+     * 根据时间戳从Broker获取对应消费队列的消费点位
+     *
+     * @param addr
+     * @param mq
+     * @param timestamp
+     * @param timeoutMillis
+     * @return
+     * @throws RemotingException
+     * @throws MQBrokerException
+     * @throws InterruptedException
+     */
     public long searchOffset(final String addr, final MessageQueue mq, final long timestamp,
         final long timeoutMillis)
         throws RemotingException, MQBrokerException, InterruptedException {
@@ -862,6 +1079,17 @@ public class MQClientAPIImpl {
         throw new MQBrokerException(response.getCode(), response.getRemark(), addr);
     }
 
+    /**
+     * 根据broker地址，从Broker中获取对应消息队列的最大偏移量
+     *
+     * @param addr
+     * @param mq
+     * @param timeoutMillis
+     * @return
+     * @throws RemotingException
+     * @throws MQBrokerException
+     * @throws InterruptedException
+     */
     public long getMaxOffset(final String addr, final MessageQueue mq, final long timeoutMillis)
         throws RemotingException, MQBrokerException, InterruptedException {
         GetMaxOffsetRequestHeader requestHeader = new GetMaxOffsetRequestHeader();
@@ -887,23 +1115,32 @@ public class MQClientAPIImpl {
         throw new MQBrokerException(response.getCode(), response.getRemark(), addr);
     }
 
+    /**
+     * 该方法向指定地址的broker发起网络请求，查找指定group的全部消费者客户端id列表并返回。请求Code为GET_CONSUMER_LIST_BY_GROUP。
+     *
+     */
     public List<String> getConsumerIdListByGroup(
         final String addr,
         final String consumerGroup,
         final long timeoutMillis) throws RemotingConnectException, RemotingSendRequestException, RemotingTimeoutException,
         MQBrokerException, InterruptedException {
+        //构建请求头
         GetConsumerListByGroupRequestHeader requestHeader = new GetConsumerListByGroupRequestHeader();
         requestHeader.setConsumerGroup(consumerGroup);
+        //构建请求命令对象，Code为GET_CONSUMER_LIST_BY_GROUP
         RemotingCommand request = RemotingCommand.createRequestCommand(RequestCode.GET_CONSUMER_LIST_BY_GROUP, requestHeader);
 
+        //发起同步调用
         RemotingCommand response = this.remotingClient.invokeSync(MixAll.brokerVIPChannel(this.clientConfig.isVipChannelEnabled(), addr),
             request, timeoutMillis);
         assert response != null;
         switch (response.getCode()) {
             case ResponseCode.SUCCESS: {
                 if (response.getBody() != null) {
+                    //响应解码
                     GetConsumerListByGroupResponseBody body =
                         GetConsumerListByGroupResponseBody.decode(response.getBody(), GetConsumerListByGroupResponseBody.class);
+                    //返回客户端id集合
                     return body.getConsumerIdList();
                 }
             }
@@ -964,6 +1201,17 @@ public class MQClientAPIImpl {
         throw new MQBrokerException(response.getCode(), response.getRemark(), addr);
     }
 
+    /**
+     * 从Broker读取消费偏移量
+     *
+     * @param addr
+     * @param requestHeader
+     * @param timeoutMillis
+     * @return
+     * @throws RemotingException
+     * @throws MQBrokerException
+     * @throws InterruptedException
+     */
     public long queryConsumerOffset(
         final String addr,
         final QueryConsumerOffsetRequestHeader requestHeader,
@@ -1009,14 +1257,25 @@ public class MQClientAPIImpl {
         throw new MQBrokerException(response.getCode(), response.getRemark(), addr);
     }
 
+    /**
+     * MQClientAPIImpl的方法
+     * <p>
+     * 更新消费偏移量单向情求
+     *
+     * @param addr          broker地址
+     * @param requestHeader 请求头
+     * @param timeoutMillis 超时时间
+     */
     public void updateConsumerOffsetOneway(
         final String addr,
         final UpdateConsumerOffsetRequestHeader requestHeader,
         final long timeoutMillis
     ) throws RemotingConnectException, RemotingTooMuchRequestException, RemotingTimeoutException, RemotingSendRequestException,
         InterruptedException {
+        //请求Code为UPDATE_CONSUMER_OFFSET
         RemotingCommand request = RemotingCommand.createRequestCommand(RequestCode.UPDATE_CONSUMER_OFFSET, requestHeader);
 
+        //单向调用，可以走vip通道
         this.remotingClient.invokeOneway(MixAll.brokerVIPChannel(this.clientConfig.isVipChannelEnabled(), addr), request, timeoutMillis);
     }
 
@@ -1073,6 +1332,7 @@ public class MQClientAPIImpl {
         final String remark,
         final long timeoutMillis
     ) throws RemotingException, InterruptedException {
+        //请求Code为END_TRANSACTION
         RemotingCommand request = RemotingCommand.createRequestCommand(RequestCode.END_TRANSACTION, requestHeader);
 
         request.setRemark(remark);
@@ -1101,6 +1361,18 @@ public class MQClientAPIImpl {
         return response.getCode() == ResponseCode.SUCCESS;
     }
 
+    /**
+     * MQClientAPIImpl的方法
+     * <p>
+     * 发送消费失败的消息到broker
+     *
+     * @param addr                 broker地址
+     * @param msg                  要发回的消息
+     * @param consumerGroup        消费者组
+     * @param delayLevel           延迟等级
+     * @param timeoutMillis        超时时间
+     * @param maxConsumeRetryTimes 最大重试次数，超过发往死信队列
+     */
     public void consumerSendMessageBack(
         final String addr,
         final String brokerName,
@@ -1111,6 +1383,7 @@ public class MQClientAPIImpl {
         final int maxConsumeRetryTimes
     ) throws RemotingException, MQBrokerException, InterruptedException {
         ConsumerSendMsgBackRequestHeader requestHeader = new ConsumerSendMsgBackRequestHeader();
+        //Code为CONSUMER_SEND_MSG_BACK
         RemotingCommand request = RemotingCommand.createRequestCommand(RequestCode.CONSUMER_SEND_MSG_BACK, requestHeader);
 
         requestHeader.setGroup(consumerGroup);
@@ -1121,6 +1394,7 @@ public class MQClientAPIImpl {
         requestHeader.setMaxReconsumeTimes(maxConsumeRetryTimes);
         requestHeader.setBname(brokerName);
 
+        //同步调用
         RemotingCommand response = this.remotingClient.invokeSync(MixAll.brokerVIPChannel(this.clientConfig.isVipChannelEnabled(), addr),
             request, timeoutMillis);
         assert response != null;
@@ -1135,17 +1409,27 @@ public class MQClientAPIImpl {
         throw new MQBrokerException(response.getCode(), response.getRemark(), addr);
     }
 
+    /**
+     * 批量给消费队列加锁
+     *
+     * @param addr
+     * @param requestBody
+     * @param timeoutMillis
+     */
     public Set<MessageQueue> lockBatchMQ(
         final String addr,
         final LockBatchRequestBody requestBody,
         final long timeoutMillis) throws RemotingException, MQBrokerException, InterruptedException {
+        // 构建 LOCK_BATCH_MQ 请求
         RemotingCommand request = RemotingCommand.createRequestCommand(RequestCode.LOCK_BATCH_MQ, null);
 
         request.setBody(requestBody.encode());
+        //同步请求，调用brokerVIPChannel判断是否开启vip通道，如果开启了，那么将brokerAddr的port – 2，因为vip通道的端口为普通端口 – 2。
         RemotingCommand response = this.remotingClient.invokeSync(MixAll.brokerVIPChannel(this.clientConfig.isVipChannelEnabled(), addr),
             request, timeoutMillis);
         switch (response.getCode()) {
             case ResponseCode.SUCCESS: {
+                //解码
                 LockBatchResponseBody responseBody = LockBatchResponseBody.decode(response.getBody(), LockBatchResponseBody.class);
                 Set<MessageQueue> messageQueues = responseBody.getLockOKMQSet();
                 return messageQueues;
@@ -1383,19 +1667,31 @@ public class MQClientAPIImpl {
         return getTopicRouteInfoFromNameServer(topic, timeoutMillis, false);
     }
 
+    /**
+     * MQClientAPIImpl的方法
+     * <p>
+     * 从nameServer获取当前指定topic的路由信息
+     *
+     * @param topic         指定topic名字
+     * @param timeoutMillis 超时时间3s
+     */
     public TopicRouteData getTopicRouteInfoFromNameServer(final String topic, final long timeoutMillis)
         throws RemotingException, MQClientException, InterruptedException {
-
+        //允许topic不存在
         return getTopicRouteInfoFromNameServer(topic, timeoutMillis, true);
     }
 
     public TopicRouteData getTopicRouteInfoFromNameServer(final String topic, final long timeoutMillis,
         boolean allowTopicNotExist) throws MQClientException, InterruptedException, RemotingTimeoutException, RemotingSendRequestException, RemotingConnectException {
+        //构建请求头
         GetRouteInfoRequestHeader requestHeader = new GetRouteInfoRequestHeader();
+        //topic设置到请求头中
         requestHeader.setTopic(topic);
 
+        //获取请求命令对象，请求的Code为GET_ROUTEINFO_BY_TOPIC，105
         RemotingCommand request = RemotingCommand.createRequestCommand(RequestCode.GET_ROUTEINFO_BY_TOPIC, requestHeader);
 
+        //同步远程调用，请求nameServer服务，注意这里的addr参数为nll，即producer会随机连接一个nameServer
         RemotingCommand response = this.remotingClient.invokeSync(null, request, timeoutMillis);
         assert response != null;
         switch (response.getCode()) {
@@ -1407,6 +1703,7 @@ public class MQClientAPIImpl {
                 break;
             }
             case ResponseCode.SUCCESS: {
+                //如果响应成功，那么对响应体进行解码
                 byte[] body = response.getBody();
                 if (body != null) {
                     return TopicRouteData.decode(body, TopicRouteData.class);

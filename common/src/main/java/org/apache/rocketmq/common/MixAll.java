@@ -120,12 +120,15 @@ public class MixAll {
 
     public static String brokerVIPChannel(final boolean isChange, final String brokerAddr) {
         if (isChange) {
+            //如果开启了vip通道
             int split = brokerAddr.lastIndexOf(":");
             String ip = brokerAddr.substring(0, split);
             String port = brokerAddr.substring(split + 1);
+            //重新拼接brokerAddr，其中port - 2
             String brokerAddrNew = ip + ":" + (Integer.parseInt(port) - 2);
             return brokerAddrNew;
         } else {
+            //如果没有开启vip通道，那么返回原地址
             return brokerAddr;
         }
     }
@@ -429,16 +432,28 @@ public class MixAll {
         return null;
     }
 
+    /**
+     * 如果目标对象目前的值已经大于目标值，则返回false，否则在一个循环中尝试CAS的更新目标对象的值为目标值。
+     * customs trade_terms
+     * customs_declaration_apply_details
+     * @param target
+     * @param value
+     * @return
+     */
     public static boolean compareAndIncreaseOnly(final AtomicLong target, final long value) {
+        //获取目标对象目前的值
         long prev = target.get();
+        //如果目标值大于当前值，则在循环中CAS的设置值
         while (value > prev) {
+            //那么尝试CAS的设置当前值为目标值
             boolean updated = target.compareAndSet(prev, value);
+            //如果CAS成功则返回true
             if (updated)
                 return true;
-
+            //如果AS失败，则重新获取目标对象目前的值
             prev = target.get();
         }
-
+        //获取目标对象目前的值已经大于目标值，则返回false
         return false;
     }
 

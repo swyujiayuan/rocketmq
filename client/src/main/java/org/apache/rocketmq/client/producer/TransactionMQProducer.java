@@ -55,9 +55,16 @@ public class TransactionMQProducer extends DefaultMQProducer {
         super(namespace, producerGroup, rpcHook, enableMsgTrace, customizedTraceTopic);
     }
 
+    /**
+     * TransactionMQProducer的方法
+     * <p>
+     * 启动事务消息生产者
+     */
     @Override
     public void start() throws MQClientException {
+        //初始化事务环境
         this.defaultMQProducerImpl.initTransactionEnv();
+        //父类DefaultMQProducer的start方法
         super.start();
     }
 
@@ -70,16 +77,23 @@ public class TransactionMQProducer extends DefaultMQProducer {
     /**
      * This method will be removed in the version 5.0.0, method <code>sendMessageInTransaction(Message,Object)</code>}
      * is recommended.
+     *
+     * @param msg 要发送的事务消息
+     * @param arg 参与本地事务使用的参数
+     * @return 发送结果
      */
     @Override
     @Deprecated
     public TransactionSendResult sendMessageInTransaction(final Message msg,
         final LocalTransactionExecuter tranExecuter, final Object arg) throws MQClientException {
+        //必须要有事务监听器
         if (null == this.transactionCheckListener) {
             throw new MQClientException("localTransactionBranchCheckListener is null", null);
         }
 
+        //根据namespace和topic设置主题，一般没有设置nameSpace
         msg.setTopic(NamespaceUtil.wrapNamespace(this.getNamespace(), msg.getTopic()));
+        //调用DefaultMQProducerImpl#sendMessageInTransaction方法发送事务消息
         return this.defaultMQProducerImpl.sendMessageInTransaction(msg, tranExecuter, arg);
     }
 

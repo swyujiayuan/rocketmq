@@ -29,20 +29,37 @@ public class LatencyFaultToleranceImpl implements LatencyFaultTolerance<String> 
 
     private final ThreadLocalIndex whichItemWorst = new ThreadLocalIndex();
 
+    /**
+     * 该方法更新LatencyFaultToleranceImpl维护的faultItemTable集合属性中的异常broker的故障信息，
+     * 将会设置发送消息的延迟时间currentLatency属性，以及下一个可用时间点startTimestamp属性。
+     *
+     * 下次可用时间startTimestamp = 现在的时间 + 隔离的时间，
+     * 在selectOneMessageQueue方法选取消息队列的时候，如果开启了集群故障转移，那么会查找下一个可用时间点小于当前时间点的broker的队列来发送消息
+
+     *
+     * @param name                 brokerName
+     * @param currentLatency       当前延迟
+     * @param notAvailableDuration 隔离时间（不可用时间）
+     */
     @Override
     public void updateFaultItem(final String name, final long currentLatency, final long notAvailableDuration) {
+        //获取该broker此前的故障记录数据
         FaultItem old = this.faultItemTable.get(name);
+        //如果此前没有数据，那么设置一个新对象
         if (null == old) {
             final FaultItem faultItem = new FaultItem(name);
+            //设置当前延迟
             faultItem.setCurrentLatency(currentLatency);
+            //设置下一次可用时间点
             faultItem.setStartTimestamp(System.currentTimeMillis() + notAvailableDuration);
-
+            //已有故障记录，更新
             old = this.faultItemTable.putIfAbsent(name, faultItem);
             if (old != null) {
                 old.setCurrentLatency(currentLatency);
                 old.setStartTimestamp(System.currentTimeMillis() + notAvailableDuration);
             }
         } else {
+            //已有故障记录，更新
             old.setCurrentLatency(currentLatency);
             old.setStartTimestamp(System.currentTimeMillis() + notAvailableDuration);
         }
@@ -52,6 +69,7 @@ public class LatencyFaultToleranceImpl implements LatencyFaultTolerance<String> 
     public boolean isAvailable(final String name) {
         final FaultItem faultItem = this.faultItemTable.get(name);
         if (faultItem != null) {
+            // 当前时间与下次可用时间（LatencyFaultToleranceImpl属性= 现在的时间 + 隔离的时间）比较，小于则表示不可用
             return faultItem.isAvailable();
         }
         return true;

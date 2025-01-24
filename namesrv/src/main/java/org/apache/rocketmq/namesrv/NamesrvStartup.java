@@ -54,7 +54,9 @@ public class NamesrvStartup {
     public static NamesrvController main0(String[] args) {
 
         try {
+            // 根据启动参数以及配置文件创建一个NameServer 核心控制器
             NamesrvController controller = createNamesrvController(args);
+            // 开启核心控制器调用 initialize方法
             start(controller);
             String tip = "The Name Server boot success. serializeType=" + RemotingCommand.getSerializeTypeConfigInThisServer();
             log.info(tip);
@@ -69,20 +71,37 @@ public class NamesrvStartup {
     }
 
     public static NamesrvController createNamesrvController(String[] args) throws IOException, JoranException {
+        //设置RocketMQ的版本信息，属性名为rocketmq.remoting.version
         System.setProperty(RemotingCommand.REMOTING_VERSION_KEY, Integer.toString(MQVersion.CURRENT_VERSION));
         //PackageConflictDetect.detectFastjson();
-
+        /*jar包启动时，构建命令行操作的指令，使用main方法启动可以忽略*/
         Options options = ServerUtil.buildCommandlineOptions(new Options());
+        //mqnamesrv命令文件
         commandLine = ServerUtil.parseCmdLine("mqnamesrv", args, buildCommandlineOptions(options), new PosixParser());
         if (null == commandLine) {
             System.exit(-1);
             return null;
         }
-
+        //创建NameServer的配置类，包含NameServer的配置，比如ROCKETMQ_HOME
         final NamesrvConfig namesrvConfig = new NamesrvConfig();
+        //NettyServer的配置类
         final NettyServerConfig nettyServerConfig = new NettyServerConfig();
+        // netty服务的监听端口设置为9876
         nettyServerConfig.setListenPort(9876);
+
+        /**
+         * 解析启动时把指定的配置文件或启动命令中的选项值，
+         * 填充到 nameServerConfig nettyServerConfig对象中
+         *
+         * 参数来源有如下两种方
+         * 1 ) -c configFile 通过 -c 命令指定配置文件的路径
+         * 2 )使用“--属性名 属性值”，例如--listenPort 9876
+         */
+
+        //判断命令行中是否包含字符'c'，即是否包含通过命令行指定配置文件的命令
+        //例如，启动Broker的时候添加的 -c /Volumes/Samsung/Idea/rocketmq/config/conf/broker.conf命令
         if (commandLine.hasOption('c')) {
+            /*解析配置文件并且存入NamesrvConfig和NettyServerConfig中，没有的话就不用管*/
             String file = commandLine.getOptionValue('c');
             if (file != null) {
                 InputStream in = new BufferedInputStream(new FileInputStream(file));
@@ -98,20 +117,23 @@ public class NamesrvStartup {
             }
         }
 
+        /*判断命令行中是否包含字符'p'，如果存在则打印配置信息并结束jvm运行，没有的话就不用管*/
         if (commandLine.hasOption('p')) {
             InternalLogger console = InternalLoggerFactory.getLogger(LoggerName.NAMESRV_CONSOLE_NAME);
             MixAll.printObjectProperties(console, namesrvConfig);
             MixAll.printObjectProperties(console, nettyServerConfig);
             System.exit(0);
         }
-
+        //把命令行的配置解析到namesrvConfig
         MixAll.properties2Object(ServerUtil.commandLine2Properties(commandLine), namesrvConfig);
 
+        //如果不存在ROCKETMQ_HOME的配置，那么打印异常并退出程序，这就是最开始启动NameServer是抛出异常的位置
         if (null == namesrvConfig.getRocketmqHome()) {
             System.out.printf("Please set the %s variable in your environment to match the location of the RocketMQ installation%n", MixAll.ROCKETMQ_HOME_ENV);
             System.exit(-2);
         }
 
+        /*一系列日志的配置*/
         LoggerContext lc = (LoggerContext) LoggerFactory.getILoggerFactory();
         JoranConfigurator configurator = new JoranConfigurator();
         configurator.setContext(lc);
@@ -120,34 +142,48 @@ public class NamesrvStartup {
 
         log = InternalLoggerFactory.getLogger(LoggerName.NAMESRV_LOGGER_NAME);
 
+        //打印nameServer 服务器配置类和 netty 服务器配置类的配置信息
         MixAll.printObjectProperties(log, namesrvConfig);
         MixAll.printObjectProperties(log, nettyServerConfig);
 
+        // 根据上面加载好的配置，namesrvConfig，nettyServerConfig创建 NameServer 核心控制器 NamesrvController
         final NamesrvController controller = new NamesrvController(namesrvConfig, nettyServerConfig);
 
         // remember all configs to prevent discard
+        // 将所有的-c的外部配置信息保存到NamesrvController中的Configuration对象属性的allConfigs属性中
         controller.getConfiguration().registerConfig(properties);
 
         return controller;
     }
 
     public static NamesrvController start(final NamesrvController controller) throws Exception {
-
+        //不能为null
         if (null == controller) {
             throw new IllegalArgumentException("NamesrvController is null");
         }
-
+        /*
+         * 1 初始化NettyServer
+         * 创建netty远程服务，初始化Netty线程池，注册请求处理器，配置定时任务，用于扫描并移除不活跃的Broker等操作。
+         */
         boolean initResult = controller.initialize();
+
+        //初始化失败则退出程序
         if (!initResult) {
             controller.shutdown();
             System.exit(-3);
         }
 
+        /*
+         * 2 添加关闭钩子方法，在NameServer关闭之前执行，进行一些内存清理、对象销毁等操作
+         */
         Runtime.getRuntime().addShutdownHook(new ShutdownHookThread(log, (Callable<Void>) () -> {
             controller.shutdown();
             return null;
         }));
 
+        /*
+         * 3 启动NettyServer，并进行监听
+         */
         controller.start();
 
         return controller;
