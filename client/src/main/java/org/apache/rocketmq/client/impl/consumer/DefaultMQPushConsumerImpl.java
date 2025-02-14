@@ -528,10 +528,11 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
                 }
 
                 if (e instanceof MQBrokerException && ((MQBrokerException) e).getResponseCode() == ResponseCode.FLOW_CONTROL) {
+                    //表示是流量控制，也就是限流则延迟20毫秒将拉取请求再次放入PullMessageService的pullRequestQueue中，等待下次拉取
                     DefaultMQPushConsumerImpl.this.executePullRequestLater(pullRequest, PULL_TIME_DELAY_MILLS_WHEN_BROKER_FLOW_CONTROL);
                 } else {
                     /*
-                     * 出现异常，延迟3s将拉取请求再次放入PullMessageService的pullRequestQueue中，等待下次拉取
+                     * 出现异常，延迟1s将拉取请求再次放入PullMessageService的pullRequestQueue中，等待下次拉取
                      */
                     DefaultMQPushConsumerImpl.this.executePullRequestLater(pullRequest, pullTimeDelayMillsWhenException);
                 }
@@ -606,6 +607,12 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
         }
     }
 
+    /**
+     * 延迟一段时间放进pullRequestQueue中
+     *
+     * @param pullRequest
+     * @param timeDelay
+     */
     private void executePullRequestLater(final PullRequest pullRequest, final long timeDelay) {
         this.mQClientFactory.getPullMessageService().executePullRequestLater(pullRequest, timeDelay);
     }

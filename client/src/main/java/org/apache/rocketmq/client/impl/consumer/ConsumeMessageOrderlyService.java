@@ -263,13 +263,22 @@ public class ConsumeMessageOrderlyService implements ConsumeMessageService {
         }
     }
 
+    /**
+     * 尝试延迟加锁并重新消费
+     *
+     * @param mq
+     * @param processQueue
+     * @param delayMills
+     */
     public void tryLockLaterAndReconsume(final MessageQueue mq, final ProcessQueue processQueue,
         final long delayMills) {
         this.scheduledExecutorService.schedule(new Runnable() {
             @Override
             public void run() {
+                // 重新加对应队列的分布式锁
                 boolean lockOK = ConsumeMessageOrderlyService.this.lockOneMQ(mq);
                 if (lockOK) {
+                    // 加锁成功则延时10毫秒
                     ConsumeMessageOrderlyService.this.submitConsumeRequestLater(processQueue, mq, 10);
                 } else {
                     ConsumeMessageOrderlyService.this.submitConsumeRequestLater(processQueue, mq, 3000);
@@ -484,7 +493,7 @@ public class ConsumeMessageOrderlyService implements ConsumeMessageService {
                 if (msg.getReconsumeTimes() >= getMaxReconsumeTimes()) {
                     //如果达到最大重试次数，设置RECONSUME_TIME属性
                     MessageAccessor.setReconsumeTime(msg, String.valueOf(msg.getReconsumeTimes()));
-                    //通过sendMessageBack发回broker延迟topic
+                    //通过sendMessageBack发回broker死信队列，topic为%RETRY%+消费组
                     if (!sendMessageBack(msg)) {
                         //如果sendMessageBack发送失败
                         //挂起

@@ -118,7 +118,7 @@ public class CommitLog {
              */
             this.flushCommitLogService = new GroupCommitService();
         } else {
-            //如果是异步刷盘，则初始化GroupCommitService服务
+            //如果是异步刷盘，则初始化FlushRealTimeService服务
             this.flushCommitLogService = new FlushRealTimeService();
         }
 
@@ -1694,7 +1694,7 @@ public class CommitLog {
                          * 执行强制刷盘操作，最少刷0页，即所有消息都会刷盘
                          */
                         CommitLog.this.mappedFileQueue.flush(0);
-                        //判断是否刷盘成功，如果上一个文件剩余大小不足，则flushedWhere会小于nextOffset，那么海选再刷一次
+                        //判断是否刷盘成功，如果上一个文件剩余大小不足，则flushedWhere会小于nextOffset，那么再刷一次
                         flushOK = CommitLog.this.mappedFileQueue.getFlushedWhere() >= req.getNextOffset();
                     }
 

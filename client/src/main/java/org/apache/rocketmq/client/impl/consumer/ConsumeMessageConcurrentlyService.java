@@ -389,6 +389,8 @@ public class ConsumeMessageConcurrentlyService implements ConsumeMessageService 
                 List<MessageExt> msgBackFailed = new ArrayList<MessageExt>(consumeRequest.getMsgs().size());
                 //消费成功的消息在消息集合中的索引+1开始，遍历消息
                 for (int i = ackIndex + 1; i < consumeRequest.getMsgs().size(); i++) {
+                    // 如果ackIndex为-1，则表示消费失败，会进入该循环
+                    // 如果ackIndex不为-1，则是消息数量-1，此时+1则会等于消息数量，不会进入循环
                     //获取该索引对应的消息
                     MessageExt msg = consumeRequest.getMsgs().get(i);
                     /*
@@ -460,7 +462,7 @@ public class ConsumeMessageConcurrentlyService implements ConsumeMessageService 
         int delayLevel = context.getDelayLevelWhenNextConsume();
 
         // Wrap topic with namespace before sending back message.
-        //使用nameSpace包装topic
+        //使用nameSpace包装topic为重试topic
         msg.setTopic(this.defaultMQPushConsumer.withNamespace(msg.getTopic()));
         try {
             //调用DefaultMQPushConsumerImpl#sendMessageBack方法发送消费失败的消息到broker

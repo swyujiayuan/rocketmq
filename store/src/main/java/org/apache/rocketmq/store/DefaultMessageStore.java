@@ -1117,11 +1117,13 @@ public class DefaultMessageStore implements MessageStore {
     }
 
     public MessageExt lookMessageByOffset(long commitLogOffset) {
+        // 获取消息所在偏移量的前面４字节，这部分数据代表这个消息的总大小
         SelectMappedBufferResult sbr = this.commitLog.getMessage(commitLogOffset, 4);
         if (null != sbr) {
             try {
                 // 1 TOTALSIZE
                 int size = sbr.getByteBuffer().getInt();
+                // 然后根据该消息大小重新获取该消息的全部内容
                 return lookMessageByOffset(commitLogOffset, size);
             } finally {
                 sbr.release();
