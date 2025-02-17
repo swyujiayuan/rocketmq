@@ -106,7 +106,7 @@ public class IndexFile {
      * 该方法用于构建Index索引，大概步骤为：
      *
      * 1. 判断如果当前文件的index索引数量小于2000w，则表明当前文件还可以继续构建索引，。
-     * 2. 计算Key的哈希值keyHash，通过 哈希值keyHash & hash槽数量hashSlotNum（默认5000w） 的方式获取当前key对应的hash槽下标位置slotPos。
+     * 2. 计算Key的哈希值keyHash，通过 哈希值keyHash & hash槽数量hashSlotNum（默认500w） 的方式获取当前key对应的hash槽下标位置slotPos。
      *      然后计算该消息的绝对hash槽偏移量 absSlotPos = 40B + slotPos * 4B。
      * 3. 计算当前消息在commitlog中的消息存储时间与该Index文件起始时间差timeDiff。
      *      计算该消息的索引存放位置的绝对偏移量absIndexPos = 40B + 500w * 4B + indexCount * 20B。
@@ -141,7 +141,7 @@ public class IndexFile {
         if (this.indexHeader.getIndexCount() < this.indexNum) {
             //计算Key的哈希值
             int keyHash = indexKeyHashMethod(key);
-            //通过 哈希值 & hash槽数量 的方式获取当前key对应的hash槽下标位置，hashSlotNum默认为5000w
+            //通过 哈希值 & hash槽数量 的方式获取当前key对应的hash槽下标位置，hashSlotNum默认为500w
             int slotPos = keyHash % this.hashSlotNum;
             //计算该消息的绝对hash槽偏移量 absSlotPos = 40B + slotPos * 4B
             int absSlotPos = IndexHeader.INDEX_HEADER_SIZE + slotPos * hashSlotSize;

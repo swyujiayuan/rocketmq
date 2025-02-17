@@ -84,9 +84,10 @@ public class AllocateMappedFileService extends ServiceThread {
 
         //根据nextFilePath创建一个请求对象，并将请求对象存入requestTable这个map集合中
         AllocateRequest nextReq = new AllocateRequest(nextFilePath, fileSize);
+        // 如果已经存在则表示之前已经创建过了，存在缓存中，还未使用，不需要重新创建该文件
         boolean nextPutOK = this.requestTable.putIfAbsent(nextFilePath, nextReq) == null;
 
-        //如果存入成功
+        //如果存入成功才创建
         if (nextPutOK) {
             if (canSubmitRequests <= 0) {
                 log.warn("[NOTIFYME]TransientStorePool is not enough, so create mapped file error, " +
@@ -130,7 +131,8 @@ public class AllocateMappedFileService extends ServiceThread {
         AllocateRequest result = this.requestTable.get(nextFilePath);
         try {
             if (result != null) {
-                //同步等待最多5s
+                //同步等待最多5s，如果上一次预创建过程中，上一次的下下个文件是异步创建的，创建成功时会调用AllocateRequest的getCountDownLatch的countDown
+                //上一次下下个文件就是此时的下个文件， 因此，这里就不会阻塞，直接返回之前已经预创建的文件
                 boolean waitOK = result.getCountDownLatch().await(waitTimeOut, TimeUnit.MILLISECONDS);
                 if (!waitOK) {
                     //超时
