@@ -419,6 +419,14 @@ public class ScheduleMessageService extends ConfigManager {
         return msgInner;
     }
 
+    /**
+     * 在start方法中，ScheduleMessageService会为每一个延迟等级创建一个DeliverDelayedMessageTimerTask投递延迟消息任务，
+     * 不同延迟等级的消息放到不同的延迟队列里面，被不同的Task处理。
+     *
+     * 采用不同的队列处理同一个延迟等级的消息的方式，不再需要进行消息排序，避免了消息排序的复杂逻辑，
+     * 能比较简单的实现有限等级的延迟消息，RocketMQ的开源版本不支持任意时间的延迟消息，这也是它的一个限制吧！
+     *
+     */
     class DeliverDelayedMessageTimerTask implements Runnable {
         private final int delayLevel;
         private final long offset;

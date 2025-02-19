@@ -905,7 +905,7 @@ public class DefaultMessageStore implements MessageStore {
                             maxPhyOffsetPulling = offsetPy;
 
                             //如果nextPhyFileStartOffset不为Long.MIN_VALUE，并且offsetPy 小于 nextPhyFileStartOffset那
-                            //表示切换到了下一个commitLog文件，并且当前偏移量下一该文件最小偏移量，那么跳过该消息的处理
+                            //表示切换到了下一个commitLog文件，并且当前偏移量小于下一文件最小偏移量，那么跳过该消息的处理
                             if (nextPhyFileStartOffset != Long.MIN_VALUE) {
                                 if (offsetPy < nextPhyFileStartOffset)
                                     continue;
@@ -974,6 +974,7 @@ public class DefaultMessageStore implements MessageStore {
                              * SQL92 过滤依赖于消息中的属性，而消息体的内容存放在commitLog中的，因此需要先拉取到消息，在进行SQL92过滤
                              */
                             if (messageFilter != null
+                                    // 里面会解析具体的消息，相当于解码，依赖属性来过滤
                                 && !messageFilter.isMatchedByCommitLog(selectResult.getByteBuffer().slice(), null)) {
                                 if (getResult.getBufferTotalSize() == 0) {
                                     status = GetMessageStatus.NO_MATCHED_MESSAGE;
@@ -1704,7 +1705,7 @@ public class DefaultMessageStore implements MessageStore {
             }
 
             //如果已拉取的消息总数量 > maxTransferCountOnMessageInMemory - 1= 32 - 1，则返回true
-            //表示从磁盘上拉取消息的数量超过了阈值32条
+            //表示从内存上拉取消息的数量超过了阈值32条
             if (messageTotal > this.messageStoreConfig.getMaxTransferCountOnMessageInMemory() - 1) {
                 return true;
             }
@@ -2448,21 +2449,29 @@ public class DefaultMessageStore implements MessageStore {
         }
     }
 
+    /**
+     * ConsumeQueue的后台刷盘组件，是一个线程
+     *
+     */
     class FlushConsumeQueueService extends ServiceThread {
         private static final int RETRY_TIMES_OVER = 3;
         private long lastFlushTimestamp = 0;
 
         private void doFlush(int retryTimes) {
+            // 刷盘的最小页数：2
             int flushConsumeQueueLeastPages = DefaultMessageStore.this.getMessageStoreConfig().getFlushConsumeQueueLeastPages();
 
             if (retryTimes == RETRY_TIMES_OVER) {
+                // 表示最后一次run方法执行结束，服务器停止了，最后一次刷盘，只有有脏数据则进行刷盘
                 flushConsumeQueueLeastPages = 0;
             }
 
             long logicsMsgTimestamp = 0;
 
+            // 刷盘间隔最大时间
             int flushConsumeQueueThoroughInterval = DefaultMessageStore.this.getMessageStoreConfig().getFlushConsumeQueueThoroughInterval();
             long currentTimeMillis = System.currentTimeMillis();
+            // 超过1分钟还未刷盘，也执行刷盘，最小刷盘页数设置为1则表示只有有脏数据则刷盘
             if (currentTimeMillis >= (this.lastFlushTimestamp + flushConsumeQueueThoroughInterval)) {
                 this.lastFlushTimestamp = currentTimeMillis;
                 flushConsumeQueueLeastPages = 0;
@@ -2471,9 +2480,12 @@ public class DefaultMessageStore implements MessageStore {
 
             ConcurrentMap<String, ConcurrentMap<Integer, ConsumeQueue>> tables = DefaultMessageStore.this.consumeQueueTable;
 
+            // 遍历所有的topic
             for (ConcurrentMap<Integer, ConsumeQueue> maps : tables.values()) {
+                // 遍历topic下的所有queue
                 for (ConsumeQueue cq : maps.values()) {
                     boolean result = false;
+                    // 默认遍历一次，服务停止则重试3次
                     for (int i = 0; i < retryTimes && !result; i++) {
                         result = cq.flush(flushConsumeQueueLeastPages);
                     }
@@ -2488,13 +2500,20 @@ public class DefaultMessageStore implements MessageStore {
             }
         }
 
+        /**
+         * 死循环执行刷盘动作，默认1秒钟执行一次刷盘
+         *
+         */
         public void run() {
             DefaultMessageStore.log.info(this.getServiceName() + " service started");
 
             while (!this.isStopped()) {
                 try {
+                    // 刷盘间隔，参数flushIntervalConsumeQueue控制，默认1秒
                     int interval = DefaultMessageStore.this.getMessageStoreConfig().getFlushIntervalConsumeQueue();
+                    // 阻塞该线程，到时间或者被唤醒则退出该方法，执行刷盘动作
                     this.waitForRunning(interval);
+                    // 执行ConsumeQueue的刷盘逻辑
                     this.doFlush(1);
                 } catch (Exception e) {
                     DefaultMessageStore.log.warn(this.getServiceName() + " service has exception. ", e);
@@ -2644,7 +2663,7 @@ public class DefaultMessageStore implements MessageStore {
                                     if (BrokerRole.SLAVE != DefaultMessageStore.this.getMessageStoreConfig().getBrokerRole()
                                             && DefaultMessageStore.this.brokerConfig.isLongPollingEnable()
                                             && DefaultMessageStore.this.messageArrivingListener != null) {
-                                        //通过该监听器的arriving方法触发调用pullRequestHoldService的pullRequestHoldService方法
+                                        //通过该监听器的arriving方法触发调用pullRequestHoldService的notifyMessageArriving方法
                                         //即唤醒挂起的拉取消息请求，表示有新的消息落盘，可以进行拉取了
                                         //这里涉及到RocketMQ的consumer消费push模式的实现,
                                         // arriving方法内部调用pullRequestHoldService的notifyMessageArriving方法，表示有新的消息到到达了该消息队列，其对应的PullRequest可以进行消息拉取了。

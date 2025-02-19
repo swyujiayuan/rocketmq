@@ -37,7 +37,7 @@ public class TransactionalMessageCheckService extends ServiceThread {
     }
 
     /**
-     * 这个线程任务内部是一个循环，首先获取事务回查时间间隔，默认60s，可通过broker.conf配置transactionCheckInterval属性更改，即每隔60s进行一次失误回查。
+     * 这个线程任务内部是一个循环，首先获取事务回查时间间隔，默认60s，可通过broker.conf配置transactionCheckInterval属性更改，即每隔60s进行一次事务回查。
      *
      * 首先需要获取broker端的事务超时时间，默认6s，即超过6s还没有被commit或者rollback的事物消息将会进行回查
      * 可通过broker.conf配置transactionTimeOut属性更改，还要获取事务回查最大次数，默认15，

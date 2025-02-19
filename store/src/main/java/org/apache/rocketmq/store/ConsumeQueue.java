@@ -406,7 +406,13 @@ public class ConsumeQueue {
         return lastOffset;
     }
 
+    // 刷盘逻辑
     public boolean flush(final int flushLeastPages) {
+        // ConsumeQueue里面也维护了一个mappedFileQueue，里面有个mappedFiles集合，维护了多个MappedFile文件
+        // 执行刷盘的逻辑和CommitLog的刷盘逻辑一致
+        // 都是先根据最新刷盘物理位置flushedWhere，去找到对应的MappedFile。
+        // 如果flushedWhere为0，表示还没有开始写消息，则获取第一个MappedFile。
+        // 然后调用mappedFile#flush方法执行真正的刷盘
         boolean result = this.mappedFileQueue.flush(flushLeastPages);
         if (isExtReadEnable()) {
             result = result & this.consumeQueueExt.flush(flushLeastPages);
@@ -697,7 +703,7 @@ public class ConsumeQueue {
         int mappedFileSize = this.mappedFileSize;
         //物理偏移量
         long offset = startIndex * CQ_STORE_UNIT_SIZE;
-        //如果大于ConsumeQueue的最小物理偏移量
+        //如果大于ConsumeQueue的最小逻辑偏移量
         if (offset >= this.getMinLogicOffset()) {
             //根据物理偏移量查找ConsumeQueue文件对应的MappedFile
             MappedFile mappedFile = this.mappedFileQueue.findMappedFileByOffset(offset);

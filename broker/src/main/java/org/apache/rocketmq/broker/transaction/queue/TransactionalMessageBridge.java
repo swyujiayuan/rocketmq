@@ -243,7 +243,7 @@ public class TransactionalMessageBridge {
     /**
      * 该方法用于写入事务Op消息。大概步骤为：
      *
-     * 1. 构建一个messageQueue，topic为half消息的topic：固定为RMQ_SYS_TRANS_HALF_TOPIC，queueId为half消息的topic：固定为0，此为对应的half消息队列。
+     * 1. 构建一个messageQueue，topic为half消息的topic：固定为RMQ_SYS_TRANS_HALF_TOPIC，queueId为half消息的queue：固定为0，此为对应的half消息队列。
      * 2. 调用addRemoveTagInTransactionOp方法，写入Op消息到half消息队列对应的Op消息队列中。
      *      2.1 构建一条Op消息，topic为RMQ_SYS_TRANS_OP_HALF_TOPIC，tags为“d”，body为 对应的half消息在half 消息队列的相对偏移量。
      *      2.2 调用writeOp方法，将Op消息写入对应的Op 消息队列。
