@@ -111,7 +111,7 @@ public class ClientRemotingProcessor extends AsyncNettyRequestProcessor implemen
     }
 
     /**
-     * checkTransactionState方法将会对消息进行解码，然后根据生产者组获取从该客户端的producerTable中获取对应的生产则，
+     * checkTransactionState方法将会对消息进行解码，然后根据生产者组获取从该客户端的producerTable中获取对应的生产者，
      * 然后通过producer#checkTransactionState方法检查事务状态。
      *
      * @param ctx
