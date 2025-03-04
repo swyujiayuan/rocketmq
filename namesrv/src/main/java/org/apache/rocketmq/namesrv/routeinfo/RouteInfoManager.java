@@ -515,14 +515,17 @@ public class RouteInfoManager {
         try {
             try {
                 this.lock.readLock().lockInterruptibly();
+                // 根据topic从topicQueueTable获取这个topic下所有的queue，以及这些queue所在的broker
                 Map<String, QueueData> queueDataMap = this.topicQueueTable.get(topic);
                 if (queueDataMap != null) {
                     topicRouteData.setQueueDatas(new ArrayList<>(queueDataMap.values()));
                     foundQueueData = true;
 
+                    // 这个topic下所有的broker
                     brokerNameSet.addAll(queueDataMap.keySet());
 
                     for (String brokerName : brokerNameSet) {
+                        // 根据broker名称获取这个broker信息，比如有多少个broker（可能是多个，比如1主，1从），地址等
                         BrokerData brokerData = this.brokerAddrTable.get(brokerName);
                         if (null != brokerData) {
                             BrokerData brokerDataClone = new BrokerData(brokerData.getCluster(), brokerData.getBrokerName(), (HashMap<Long, String>) brokerData
